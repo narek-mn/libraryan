@@ -56,6 +56,10 @@ def lint(root: Path, cfg: dict, files: list[str]) -> list[str]:
     return problems
 
 
+def scan_text(text: str, label: str) -> list[str]:
+    return [f"{label}: possible secret"] if any(rx.search(text) for rx in SECRETS) else []
+
+
 def scan_secrets(root: Path, files: list[str]) -> list[str]:
     root, problems = Path(root), []
     gitleaks = shutil.which("gitleaks")
@@ -68,9 +72,7 @@ def scan_secrets(root: Path, files: list[str]) -> list[str]:
             if r.returncode:
                 problems.append(f"{rel}: possible secret (gitleaks)")
         else:
-            text = p.read_text(errors="replace")
-            if any(rx.search(text) for rx in SECRETS):
-                problems.append(f"{rel}: possible secret")
+            problems += scan_text(p.read_text(errors="replace"), rel)
     return problems
 
 
