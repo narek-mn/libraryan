@@ -47,6 +47,8 @@ if "rm_restore" in modes:  # deletion undone after a reviewer rejection
     text = Path("README.md").read_text()
     subprocess.run(["git", "rm", "-q", "--", "README.md"], check=True)
     Path("README.md").write_text(text)
+if "delete_doc" in modes:  # an owned doc deleted the way the agent does it
+    subprocess.run(["git", "rm", "-q", "docs/old.md"], check=True)
 if "codeedit" in modes:  # the agent strays into code
     Path("app.py").write_text("x = 2\n")
     subprocess.run(["git", "rm", "-q", "--", "util.py"], check=True)
@@ -63,7 +65,8 @@ if "discard" in modes:  # reviewer rejected a new note
     discard.append("docs/kb/x.md")
 if "discard_existing" in modes:
     discard.append("docs/kb/index.md")
-text = "SUMMARY ok\n" + "".join(f"Discard: {p}\n" for p in discard)
+extra = os.environ.get("FAKE_CLAUDE_EXTRA", "")
+text = "SUMMARY ok\n" + (extra + "\n" if extra else "") + "".join(f"Discard: {p}\n" for p in discard)
 if "--output-format" in sys.argv and "nojson" not in modes:
     print(json.dumps({"type": "result", "result": text, "total_cost_usd": 0.01, "num_turns": 3,
                       "duration_ms": 100, "is_error": False}))

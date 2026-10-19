@@ -601,3 +601,32 @@ def test_cap_writes_report_line(repo):
     runner.run(repo, cfg, "commit")
     line = "Daily cap reached: max_consecutive_failures; run `libraryan run` to override."
     assert line in (state(repo) / "reports/latest.md").read_text()
+
+
+def commit_old_doc(repo):
+    (repo / "docs/old.md").write_text("# Old\n\nThe deploy script pushes images to staging.\n")
+    git(repo, "add", "docs/old.md")
+    git(repo, "commit", "-m", "old", env={"LIBRARYAN": "1"})
+
+
+def test_run_fails_on_unledgered_deletion(repo, monkeypatch):
+    cfg = make_kb(repo)
+    commit_old_doc(repo)
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "delete_doc")
+    assert runner.run(repo, cfg, "manual") == 1
+    assert libraryan_commits(repo) == [] and (repo / "docs/old.md").exists()
+    assert git(repo, "status", "--porcelain", "--", "docs") == ""
+    assert "deletion ledger: docs/old.md" in (state(repo) / "reports/latest.md").read_text()
+    assert last_trace(repo)["deleted"] == 1
+
+
+def test_run_commits_ledgered_deletion(repo, monkeypatch):
+    cfg = make_kb(repo)
+    commit_old_doc(repo)
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "delete_doc")
+    monkeypatch.setenv("FAKE_CLAUDE_EXTRA", "Fact: docs/old.md => none | empty stub")
+    assert runner.run(repo, cfg, "manual") == 0
+    assert "docs/old.md" not in head_files(repo)
+    latest = (state(repo) / "reports/latest.md").read_text()
+    assert "## Deletion ledger\n\nFact: docs/old.md => none | empty stub" in latest
+    assert last_trace(repo)["deleted"] == 1

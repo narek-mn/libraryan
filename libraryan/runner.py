@@ -9,7 +9,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import checks, gitutil, trace
+from . import checks, gitutil, ledger, trace
 from .paths import is_protected, is_request
 
 ALLOWED_TOOLS = ("Read,Edit,Write,Glob,Grep,Task,Agent,Bash(git log:*),Bash(git diff:*),Bash(git show:*),"
@@ -250,7 +250,7 @@ def _commit(root: Path, paths: list[str], reason: str, output: str) -> str | Non
 
 
 def _report(st: Path, reason: str, work: dict, changed: list[str], problems: list[str], output: str,
-            calls: list[dict] = ()) -> None:
+            calls: list[dict] = (), ledger_lines: list[str] = ()) -> None:
     lines = [f"# Libraryan run: {reason}", "",
              f"- Requests: {', '.join(work['requests']) or 'none'}",
              f"- Commits since {work['since'] or '(none)'}: {work['commits']}",
@@ -261,7 +261,7 @@ def _report(st: Path, reason: str, work: dict, changed: list[str], problems: lis
     cost = sum(c.get("cost_usd") or 0 for c in calls)
     if cost or any("turns" in c for c in calls):
         lines += [f"- Cost: ${cost:.2f} ({sum(c.get('turns') or 0 for c in calls)} turns)", ""]
-    lines += ["## Model output", "", output.strip(), ""]
+    lines += ["## Deletion ledger", "", *(ledger_lines or ["none"]), "", "## Model output", "", output.strip(), ""]
     text = "\n".join(lines)
     (st / "reports" / time.strftime("%Y%m%dT%H%M%SZ.md", time.gmtime(_now()))).write_text(text)
     (st / "reports/latest.md").write_text(text)
@@ -291,11 +291,11 @@ def cap_hit(st: Path, cfg: dict) -> str | None:
     return "max_consecutive_failures" if fails >= cfg["max_consecutive_failures"] else None
 
 
-def _trace(st: Path, reason: str, head: str, outcome: str, calls=(), changed=(), root: Path | None = None,
+def _trace(st: Path, reason: str, head: str, outcome: str, calls=(), changed=(), deleted=(),
            problems=(), commit=None, cap=None) -> None:
     """The one trace record of a run() loop iteration; cap and audit_findings are filled by later features."""
     trace.append(st, {"reason": reason, "head": head, "outcome": outcome, "calls": list(calls),
-                      "changed": len(changed), "deleted": sum(not (root / p).exists() for p in changed) if root else 0,
+                      "changed": len(changed), "deleted": len(deleted),
                       "problems": len(problems), "commit": commit, "cap": cap, "audit_findings": 0})
 
 
@@ -342,7 +342,7 @@ def run(root: Path, cfg: dict, reason: str, extra_paths=()) -> int:
                 cmd += ["--model", cfg["model"]]
             timeout = cfg["setup_timeout_minutes" if reason == "setup" else "run_timeout_minutes"] * 60
             cmd += ["--max-budget-usd", str(cfg["max_usd_setup" if reason == "setup" else "max_usd_run"])]
-            output, calls = "", []
+            output, calls, parsed, deleted = "", [], {"lines": []}, []
             try:
                 output, problems, usage = _call_model([*cmd, build_prompt(reason, work, cfg)], root, timeout)
                 calls.append({"role": "author", **usage})
@@ -362,9 +362,14 @@ def run(root: Path, cfg: dict, reason: str, extra_paths=()) -> int:
                 changed = [p for p in diff
                            if (p in tracked or (root / p).exists() or p in in_head) and p not in baseline]
                 problems += checks.run_all(root, cfg, [p for p in changed if p.endswith(".md")])
+                # owned docs this run deleted must say where their facts went (requests are exempt)
+                deleted = [p for p in changed if p in in_head and p.endswith(".md") and is_protected(p, cfg)
+                           and not (root / p).exists()]
+                parsed = ledger.parse(output)
+                problems += ledger.check(root, cfg, deleted, snap, after, parsed)
                 if not _on_default(root, cfg):  # another agent switched branch during the run
                     _restore(root, snap, diff, to_head=True)
-                    _trace(st, reason, work["head"], "deferred", calls, changed, root, problems)
+                    _trace(st, reason, work["head"], "deferred", calls, changed, deleted, problems)
                     return 0
                 # ponytail: also trips on another agent's concurrent code edits; a false failure beats a silent
                 # stray edit. Those paths are reported, never restored (they may be someone's work).
@@ -380,10 +385,10 @@ def run(root: Path, cfg: dict, reason: str, extra_paths=()) -> int:
                         problems.append(err)
                 if problems:
                     _restore(root, snap, diff)
-                    _report(st, reason, work, changed, problems, output, calls)
+                    _report(st, reason, work, changed, problems, output, calls, parsed["lines"])
                     if not transient:
                         (st / "last_failed").write_text(work["head"] + "\n")
-                    _trace(st, reason, work["head"], "failed", calls, changed, root, problems)
+                    _trace(st, reason, work["head"], "failed", calls, changed, deleted, problems)
                     return 1
             except BaseException as e:  # Ctrl-C, a crash, a failed restore: leave no half-done run behind
                 try:
@@ -394,8 +399,8 @@ def run(root: Path, cfg: dict, reason: str, extra_paths=()) -> int:
                     (st / "last_failed").write_text(work["head"] + "\n")
                     _trace(st, reason, work["head"], "aborted", calls, problems=[repr(e)])
                 raise
-            _report(st, reason, work, changed, problems, output, calls)
-            _trace(st, reason, work["head"], "committed" if changed else "nothing_changed", calls, changed, root,
+            _report(st, reason, work, changed, problems, output, calls, parsed["lines"])
+            _trace(st, reason, work["head"], "committed" if changed else "nothing_changed", calls, changed, deleted,
                    commit=gitutil.head(root) if changed else None)
             (st / "last_processed").write_text(work["head"] + "\n")  # commits made during the run stay new work
             (st / "last_failed").unlink(missing_ok=True)

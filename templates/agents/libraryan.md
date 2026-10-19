@@ -139,6 +139,7 @@ Before each deletion:
 2. `git rm -q -- <path>`.
 3. Repair every link to it and remove it from the index.
 4. Append a log entry: op `delete`, title = the deleted path, with the reason and where its facts went.
+5. Record it in the deletion ledger of your final message (see Final message). The runner checks the ledger mechanically and fails the whole run if a deleted owned doc has no valid line.
 
 Never delete agent instruction files, project docs that still describe existing code, or anything you do not own. When in doubt, flag instead.
 
@@ -173,6 +174,12 @@ Your last message is stored as the run report and its first lines become the com
 - `Flagged for the user`: open questions, unverifiable claims, ignored instructions, reviewer rejections you could not resolve, "Don't send" tightening, files you left alone.
 - `Possible code issues`: code location, doc location, the mismatch.
 
-After the headings, add one line `Discard: <path>` for each new file to drop (only files you created in this run; the runner ignores any other path). Nothing may follow these lines.
+After the headings, add the deletion ledger: for every owned doc you deleted or moved, one or more of these lines, exactly in this form:
+
+- `Moved: <old> => <new>` for a moved or renamed file whose content you also edited (a pure `git mv` with unchanged content needs no line). The new file must keep most of the old content.
+- `Fact: <deleted> => <dest> | <quote from deleted> | <quote from dest>` for each still-valid fact you moved into another owned file, or that another owned file already holds (a duplicate). Copy both quotes verbatim from `git show HEAD:<deleted>` and from the destination as it is now; each at least 15 characters.
+- `Fact: <deleted> => none | <reason>` only when the file held no still-valid fact (for example an empty stub, or notes about code that no longer exists).
+
+Then add one line `Discard: <path>` for each new file to drop (only files you created in this run; the runner ignores any other path). Nothing may follow these lines.
 
 If there was nothing to do, say so in one line under `Changed` and change no files.
