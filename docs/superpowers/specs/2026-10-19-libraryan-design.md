@@ -148,6 +148,8 @@ Known ceiling: `LIBRARYAN=1` can be set by any process, so a deliberately misbeh
 
 Each run that changes something writes `.libraryan/state/reports/<timestamp>.md` (what changed, what was rejected, what needs attention) and updates `.libraryan/state/reports/latest.md`. The daily run also writes a digest of the day.
 
+v0.2 additions (run trace, cost caps, deletion ledger, independent reviewer, audit): see `2026-10-19-libraryan-hardening-design.md`.
+
 ### 8.9 Setup on an existing project
 
 `init` must be safe on a messy repo: it proposes owned/excluded globs from a scan, restructures existing docs into the KB layout while keeping every existing fact (moved, not dropped), updates links, and does it all in one `docs(libraryan): setup` commit. It refuses to run with uncommitted changes in owned paths.

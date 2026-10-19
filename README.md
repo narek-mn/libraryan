@@ -38,9 +38,24 @@ the Claude Code hook blocks Edit/Write, and the pre-commit hook rejects commits 
 To change docs, add a Markdown file under `.libraryan/requests/` (see the `libraryan-request` skill) and commit it.
 After a commit, Libraryan waits `debounce_minutes` for quiet, then runs and commits the doc updates.
 A failed run is retried only after the next commit or by `run` (see `reports/latest.md`); the daily health check is skipped when nothing was committed since the last one.
+Before any model call, Libraryan runs `libraryan audit` (below). A daily health check that finds nothing to fix, with no requests and no new commits, ends there at no cost (outcome `audited`).
 
 Docs vs code: if docs contradict the code, Libraryan fixes the docs; suspected code bugs go under "Possible code issues" in the report.
 Outdated or junk Markdown is deleted after still-valid facts are moved into the KB (git history keeps everything).
+
+Deletion-ledger rule: a deleted owned doc is accepted only if it is a pure move (identical content now exists at a new owned path) or the run's output says where its facts went, one line per doc:
+
+```
+Moved: <old> => <new>
+Fact: <deleted> => <dest> | <quote from deleted> | <quote from dest>
+Fact: <deleted> => none | <reason>
+```
+
+`Moved:` needs a destination owned by Libraryan and at least 50% similar to the original. `Fact:` quotes (15+ characters) are checked against the deleted file in HEAD and the destination. Anything else fails the run and the deletion is restored.
+
+Independent review (`independent_review`, on by default): when a run has changes and its own checks pass, the runner starts a second, read-only `claude -p` run (agent `libraryan-reviewer`, runner-built prompt, no author summary) before committing. This is one extra model call per committing run. It fails closed: only the exact answer `APPROVE` passes; anything else, a timeout, or a reviewer that edits files fails the run.
+
+Daily caps: a non-manual run is skipped (outcome `capped`, noted in `reports/latest.md`) once the UTC day has `max_runs_per_day` model runs or `max_commits_per_day` commits, or the last `max_consecutive_failures` runs failed or aborted. `libraryan run` (reason `manual`) ignores the caps. Each model call also gets `--max-budget-usd` (`max_usd_run`, `max_usd_setup`, `max_usd_review`).
 
 ## Commands
 
@@ -50,6 +65,8 @@ Run via the vendored `python3 .libraryan/bin/libraryan <cmd>` inside the project
 |---|---|
 | `run [--reason R]` | Run Libraryan now (default reason `manual`) |
 | `wait` | Wait out the debounce window, then run |
+| `audit` | Deterministic docs-vs-code audit, no model call, always exit 0 (see below) |
+| `stats [--days N]` | Per-day runs, model calls, commits, failures and cost from the run trace (default 7 days) |
 | `check` | Lint docs and scan for secrets; exit 1 on problems |
 | `upgrade` | Re-run the installer from `source_path` (refreshes runtime, hooks, agents, skill) and commit |
 | `uninstall` | Remove hooks, cron, agent files, `.libraryan/` and the AGENTS.md block; commit. The KB stays |
@@ -70,6 +87,13 @@ Without a project install, `python3 ~/libraryan/libraryan.py {init,upgrade,unins
 | `debounce_minutes` | `10` | Quiet time after a commit before a run |
 | `run_timeout_minutes` | `30` | Kill a run after this long |
 | `setup_timeout_minutes` | `120` | Same, for the setup run |
+| `max_usd_run` / `max_usd_setup` / `max_usd_review` | `5` / `25` / `2` | Per-call budget passed to `claude --max-budget-usd` (run, setup, reviewer) |
+| `max_runs_per_day` | `24` | Daily cap on runs that call the model |
+| `max_commits_per_day` | `12` | Daily cap on Libraryan commits |
+| `max_consecutive_failures` | `3` | Stop automatic runs after this many failed or aborted runs in a row |
+| `independent_review` | `true` | Run the reviewer before every commit |
+| `reviewer_model` | `null` | Model for the reviewer (falls back to `model`) |
+| `review_timeout_minutes` | `15` | Kill a reviewer call after this long |
 | `language` | `en` | Language of the docs |
 | `owned` / `excluded` | see `config.py` | Globs Libraryan owns / ignores |
 | `exempt` | `[]` | Owned-looking paths people may still edit |
@@ -77,7 +101,13 @@ Without a project install, `python3 ~/libraryan/libraryan.py {init,upgrade,unins
 
 ## Reports
 
-Each run writes `.libraryan/state/reports/<timestamp>.md` and `.libraryan/state/reports/latest.md` (gitignored). Read `latest.md` for what changed, problems, and "Possible code issues".
+Each run writes `.libraryan/state/reports/<timestamp>.md` and `.libraryan/state/reports/latest.md` (gitignored). Read `latest.md` for what changed, problems, cost, the deletion ledger, and "Possible code issues".
+
+Every run, including skipped ones, also appends a line to `.libraryan/state/runs.jsonl` (this replaces `runs.log`). Outcomes: `noop`, `deferred`, `capped`, `audited`, `nothing_changed`, `committed`, `failed`, `aborted`. `libraryan stats` summarises it.
+
+## Audit
+
+`libraryan audit` checks owned docs against the repo using paths only (no symbols): `broken-link`, `missing-path` (a backticked path that does not exist), and for KB notes `not-indexed`, `unsourced`, `missing-source`, `stale` (source changed after the note's `updated` date) and `duplicate-title`. Findings are leads, not a gate. The runner passes them to the model on runs that happen anyway.
 
 ## Uninstall
 
