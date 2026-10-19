@@ -15,9 +15,10 @@ def git(repo, *args, env=None):
     return subprocess.run(["git", *args], cwd=repo, capture_output=True, text=True, check=True, env=e).stdout
 
 
-def make_kb(repo):
+def make_kb(repo, ignore_state=True):
     install_runtime(repo)
-    (repo / ".libraryan/.gitignore").write_text("state/\n")
+    if ignore_state:
+        (repo / ".libraryan/.gitignore").write_text("state/\n")
     (repo / "docs/kb").mkdir(parents=True)
     (repo / "docs/kb/index.md").write_text("# Index\n")
     git(repo, "add", "-A")
@@ -57,7 +58,7 @@ def test_run_commits_changes(repo):
     assert "SUMMARY ok" in git(repo, "log", "-1", "--format=%b")
     latest = (state(repo) / "reports/latest.md").read_text()
     assert "docs/kb/index.md" in latest and "SUMMARY ok" in latest
-    assert (state(repo) / "last_processed").read_text().strip() == git(repo, "rev-parse", "HEAD").strip()
+    assert runner.find_work(repo, cfg, "manual")["commits"] == 0  # its own commit is not new work
 
 
 def test_commit_excludes_unrelated_changes(repo):
@@ -103,7 +104,7 @@ def test_run_lock_sets_rerun(repo):
 
 def test_run_reverts_on_lint_failure(repo, monkeypatch):
     cfg = make_kb(repo)
-    monkeypatch.setenv("FAKE_CLAUDE_BADNOTE", "1")
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "badnote")
     assert runner.run(repo, cfg, "manual") == 1
     assert libraryan_commits(repo) == []
     assert not (repo / "docs/kb/bad.md").exists()
@@ -154,3 +155,67 @@ def test_cli_run_end_to_end(repo):
     assert r.returncode == 0, r.stderr
     assert libraryan_commits(repo) == ["docs(libraryan): daily run"]
     assert not list((repo / ".libraryan").rglob("__pycache__"))
+
+
+def head_files(repo):
+    return git(repo, "ls-tree", "-r", "-z", "--name-only", "HEAD").split("\0")
+
+
+def test_requests_only_deleted_never_swept(repo, monkeypatch):
+    cfg = make_kb(repo)
+    add_request(repo)
+    git(repo, "add", ".libraryan/requests")
+    git(repo, "commit", "-m", "request")
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "race_request")
+    assert runner.run(repo, cfg, "manual") == 0
+    files = head_files(repo)
+    assert ".libraryan/requests/20261019-120000-x.md" not in files  # processed request deletion committed
+    assert ".libraryan/requests/other-agent.md" not in files
+    assert (repo / ".libraryan/requests/other-agent.md").exists()
+
+
+def test_request_written_during_failed_run_survives(repo, monkeypatch):
+    cfg = make_kb(repo)
+    add_request(repo)
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "race_request,badnote")
+    assert runner.run(repo, cfg, "manual") == 1
+    assert (repo / ".libraryan/requests/other-agent.md").exists()
+    assert (repo / ".libraryan/requests/20261019-120000-x.md").exists()  # restored
+
+
+def test_state_files_never_committed(repo):
+    cfg = make_kb(repo, ignore_state=False)
+    assert runner.run(repo, cfg, "manual") == 0
+    assert not [f for f in head_files(repo) if f.startswith(".libraryan/state/")]
+
+
+def test_commit_during_run_is_still_work(repo, monkeypatch):
+    cfg = make_kb(repo)
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "commit")
+    assert runner.run(repo, cfg, "manual") == 0
+    assert runner.find_work(repo, cfg, "manual")["commits"] == 1
+
+
+def test_branch_switch_during_run_defers(repo, monkeypatch):
+    cfg = make_kb(repo)
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "checkout")
+    assert runner.run(repo, cfg, "manual") == 0
+    assert libraryan_commits(repo) == []
+    assert git(repo, "status", "--porcelain") == ""
+    assert "deferred" in (state(repo) / "runs.log").read_text()
+
+
+def test_model_timeout_fails_run(repo, monkeypatch):
+    cfg = make_kb(repo)
+    cfg["run_timeout_minutes"] = 0.01
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "sleep")
+    assert runner.run(repo, cfg, "manual") == 1
+    assert (repo / "docs/kb/index.md").read_text() == "# Index\n"
+    assert "timed out" in (state(repo) / "reports/latest.md").read_text()
+
+
+def test_non_ascii_note_committed(repo, monkeypatch):
+    cfg = make_kb(repo)
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "unicode")
+    assert runner.run(repo, cfg, "manual") == 0
+    assert "docs/kb/գիտելիք.md" in head_files(repo)

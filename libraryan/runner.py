@@ -12,12 +12,13 @@ from .paths import is_protected, is_request
 ALLOWED_TOOLS = ("Read,Edit,Write,Glob,Grep,Task,Agent,Bash(git log:*),Bash(git diff:*),Bash(git show:*),"
                  "Bash(git status:*),Bash(python3 .libraryan/bin/libraryan check:*)")
 
+STATE = ".libraryan/state"
 _now = time.time
 _sleep = time.sleep
 
 
 def _state(root: Path) -> Path:
-    d = Path(root) / ".libraryan/state"
+    d = Path(root) / STATE
     (d / "reports").mkdir(parents=True, exist_ok=True)
     return d
 
@@ -74,11 +75,12 @@ def find_work(root: Path, cfg: dict, reason: str) -> dict:
     if since and subprocess.run(["git", "merge-base", "--is-ancestor", since, "HEAD"], cwd=root,
                                 capture_output=True).returncode:
         since = gitutil.git(root, "merge-base", since, "HEAD", check=False) or None  # None if sha unknown
-    if since:
-        commits = int(gitutil.git(root, "rev-list", "--count", f"{since}..HEAD"))
+    if since:  # Libraryan's own commits are not new work
+        commits = int(gitutil.git(root, "rev-list", "--count", "--invert-grep", "--grep=^docs(libraryan):",
+                                  f"{since}..HEAD"))
     last_health = float(_read(st / "last_health") or 0)
     health = reason in ("daily", "setup") or _now() - last_health >= 24 * 3600
-    return {"requests": requests, "since": since, "commits": commits, "health": health}
+    return {"requests": requests, "since": since, "commits": commits, "health": health, "head": gitutil.head(root)}
 
 
 def build_prompt(reason: str, work: dict, cfg: dict) -> str:
@@ -101,20 +103,36 @@ End with a short summary: changed, rejected (with reason), flagged for the user.
 """
 
 
+def _ls_files(root: Path, *args) -> list[str]:
+    return [p for p in gitutil.git(root, "ls-files", "-z", *args).split("\0") if p]
+
+
 def _snapshot(root: Path, cfg: dict) -> dict[str, str | None]:
-    files = [p for p in gitutil.git(root, "ls-files", "-co", "--exclude-standard").splitlines()
-             if is_protected(p, cfg) or is_request(p)]
+    files = [p for p in _ls_files(root, "-co", "--exclude-standard")
+             if (is_protected(p, cfg) or is_request(p)) and not p.startswith(STATE + "/")]
     present = [p for p in files if (Path(root) / p).is_file()]
-    # -w stores the blobs so pre-run content (incl. untracked requests) can be restored on failure
-    out = subprocess.run(["git", "hash-object", "-w", "--stdin-paths"], cwd=root, input="\n".join(present),
-                         capture_output=True, text=True, check=True).stdout.split()
-    return {**dict.fromkeys(files), **dict(zip(present, out))}
+    hashes = []
+    for i in range(0, len(present), 500):  # -w stores blobs so pre-run content can be restored on failure
+        hashes += gitutil.git(root, "hash-object", "-w", "--", *present[i:i + 500]).split()
+    return {**dict.fromkeys(files), **dict(zip(present, hashes))}
 
 
-def _restore(root: Path, snap: dict, paths: list[str]) -> None:
+def _libraryan_changes(snap: dict, after: dict) -> list[str]:
+    """Paths Libraryan changed. On requests it may only delete ones that existed before the run;
+    new or edited requests belong to other agents and are never committed or restored."""
+    return sorted(p for p in snap.keys() | after.keys() if snap.get(p) != after.get(p)
+                  and (not is_request(p) or (snap.get(p) and after.get(p) is None)))
+
+
+def _restore(root: Path, snap: dict, paths: list[str], to_head=False) -> None:
+    """Put `paths` back as they were before the run (to_head: as in HEAD, after a branch switch)."""
+    in_head = set(gitutil.git(root, "ls-tree", "-r", "-z", "--name-only", "HEAD", "--", *paths).split("\0")
+                  ) if to_head and paths else set()
     for p in paths:
         f = Path(root) / p
-        if snap.get(p) is None:
+        if p in in_head:
+            gitutil.git(root, "checkout", "HEAD", "--", p)
+        elif snap.get(p) is None:
             f.unlink(missing_ok=True)
         else:
             f.parent.mkdir(parents=True, exist_ok=True)
@@ -125,18 +143,19 @@ def _restore(root: Path, snap: dict, paths: list[str]) -> None:
 def _commit(root: Path, paths: list[str], reason: str, output: str) -> str | None:
     """Commit only `paths`; returns an error message on failure."""
     env = {**os.environ, "LIBRARYAN": "1"}
-    gitutil.git(root, "add", "-A", "--", *paths)
     msg = ["-m", f"docs(libraryan): {reason} run"]
     body = "\n".join(output.strip().splitlines()[:20])
     if body:
         msg += ["-m", body]
     for attempt in range(4):
-        r = subprocess.run(["git", "commit", "-q", *msg, "--", *paths], cwd=root, env=env,
-                           capture_output=True, text=True)
+        r = subprocess.run(["git", "add", "-A", "--", *paths], cwd=root, capture_output=True, text=True)
+        if r.returncode == 0:
+            r = subprocess.run(["git", "commit", "-q", *msg, "--", *paths], cwd=root, env=env,
+                               capture_output=True, text=True)
         if r.returncode == 0:
             return None
         if "index.lock" not in r.stderr or attempt == 3:
-            return f"commit failed: {(r.stderr or r.stdout).strip()}"
+            return f"git add/commit failed: {(r.stderr or r.stdout).strip()}"
         _sleep(2)
 
 
@@ -154,6 +173,19 @@ def _report(st: Path, reason: str, work: dict, changed: list[str], problems: lis
     (st / "reports/latest.md").write_text(text)
 
 
+def _on_default(root: Path, cfg: dict) -> bool:
+    try:
+        return gitutil.current_branch(root) == cfg["default_branch"]
+    except subprocess.CalledProcessError:  # detached HEAD
+        return False
+
+
+def _defer(st: Path, reason: str, cfg: dict) -> None:
+    with open(st / "runs.log", "a") as log:
+        log.write(f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(_now()))} {reason}: deferred "
+                  f"(not on {cfg['default_branch']})\n")
+
+
 def run(root: Path, cfg: dict, reason: str, extra_paths=()) -> int:
     root, st = Path(root), _state(root)
     lock = _try_lock(st / "run.lock")
@@ -163,14 +195,8 @@ def run(root: Path, cfg: dict, reason: str, extra_paths=()) -> int:
     with lock:
         while True:
             (st / "rerun").unlink(missing_ok=True)
-            try:
-                on_default = gitutil.current_branch(root) == cfg["default_branch"]
-            except subprocess.CalledProcessError:  # detached HEAD
-                on_default = False
-            if not on_default:
-                with open(st / "runs.log", "a") as log:
-                    log.write(f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(_now()))} {reason}: deferred "
-                              f"(not on {cfg['default_branch']})\n")
+            if not _on_default(root, cfg):
+                _defer(st, reason, cfg)
                 return 0
             work = find_work(root, cfg, reason)
             if not (work["requests"] or work["commits"] or work["health"] or reason == "setup"):
@@ -182,15 +208,22 @@ def run(root: Path, cfg: dict, reason: str, extra_paths=()) -> int:
                 cmd += ["--model", cfg["model"]]
             try:
                 r = subprocess.run([*cmd, build_prompt(reason, work, cfg)], cwd=root, capture_output=True,
-                                   text=True, env={**os.environ, "LIBRARYAN": "1"})
+                                   text=True, env={**os.environ, "LIBRARYAN": "1"},
+                                   timeout=cfg["run_timeout_minutes"] * 60)
                 output, problems = r.stdout, [f"{cfg['claude_bin']} exited {r.returncode}"] if r.returncode else []
+            except subprocess.TimeoutExpired:
+                output, problems = "", [f"{cfg['claude_bin']} timed out after {cfg['run_timeout_minutes']} min"]
             except OSError as e:
                 output, problems = "", [f"could not start {cfg['claude_bin']}: {e}"]
             after = _snapshot(root, cfg)
-            diff = sorted(p for p in snap.keys() | after.keys() if snap.get(p) != after.get(p))
-            tracked = set(gitutil.git(root, "ls-files").splitlines())
+            diff = _libraryan_changes(snap, after)
+            tracked = set(_ls_files(root))
             changed = [p for p in dict.fromkeys([*diff, *extra_paths]) if p in tracked or (root / p).exists()]
             problems += checks.run_all(root, cfg, [p for p in changed if p.endswith(".md")])
+            if not _on_default(root, cfg):  # another agent switched branch during the run
+                _restore(root, snap, diff, to_head=True)
+                _defer(st, reason, cfg)
+                return 0
             if changed and not problems:
                 err = _commit(root, changed, reason, output)
                 if err:
@@ -201,7 +234,7 @@ def run(root: Path, cfg: dict, reason: str, extra_paths=()) -> int:
                 _report(st, reason, work, changed, problems, output)
                 return 1
             _report(st, reason, work, changed, problems, output)
-            (st / "last_processed").write_text(gitutil.head(root) + "\n")
+            (st / "last_processed").write_text(work["head"] + "\n")  # commits made during the run stay new work
             if work["health"]:
                 (st / "last_health").write_text(str(_now()))
             if not (st / "rerun").exists():

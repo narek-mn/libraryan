@@ -12,6 +12,7 @@ DEFAULTS = {
     "claude_bin": "claude",
     "model": None,
     "debounce_minutes": 10,
+    "run_timeout_minutes": 30,
     "language": "en",
     "owned": ["**/*.md", ".claude/skills/**", ".cursor/rules/**", ".github/copilot-instructions.md"],
     "excluded": ["**/node_modules/**", "**/vendor/**", "**/fixtures/**", "**/testdata/**", "**/templates/**", "**/.venv/**"],
