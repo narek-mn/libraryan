@@ -102,3 +102,23 @@ def test_deleted_without_line(kb):
     repo, cfg, snap = kb
     probs = delete(repo, cfg, snap, "SUMMARY ok")
     assert len(probs) == 1 and probs[0].startswith("deletion ledger: docs/old.md:")
+
+
+def test_parse_bullets_backticked_lines_and_wrapped_quotes():
+    p = ledger.parse("- Fact: docs/a.md => none | empty stub\n* Moved: docs/b.md => docs/kb/b.md\n"
+                     "`Fact: docs/c.md => none | empty stub`\n"
+                     '+ Fact: docs/d.md => docs/kb/x.md | "quote one here ok" | “quote two here ok”\n'
+                     "Fact: docs/e.md => docs/kb/x.md | `quote one here ok` | 'quote two here ok'\n")
+    assert p["none"] == {"docs/a.md": "empty stub", "docs/c.md": "empty stub"}
+    assert p["moved"] == {"docs/b.md": "docs/kb/b.md"}
+    assert [(f["src_quote"], f["dest_quote"]) for f in p["facts"]] == [("quote one here ok", "quote two here ok")] * 2
+
+
+def test_pure_move_into_discarded_file_fails(kb):
+    repo, cfg, snap = kb
+    (repo / "docs/kb/old.md").write_text(OLD)
+    (repo / "docs/old.md").unlink()
+    after = runner._snapshot(repo, cfg)
+    (repo / "docs/kb/old.md").unlink()  # the runner's Discard: removal happens after the snapshot
+    probs = ledger.check(repo, cfg, ["docs/old.md"], snap, after, ledger.parse(""))
+    assert len(probs) == 1 and probs[0].startswith("deletion ledger: docs/old.md:")

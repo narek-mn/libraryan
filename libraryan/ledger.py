@@ -11,6 +11,16 @@ FACT = re.compile(r"^Fact: `?(.+?)`? => `?(.+?)`? \| (.+?)\s*$")
 MIN_QUOTE = 15
 
 
+def clean(line: str) -> str:
+    """A model output line without a list bullet or wrapping backticks."""
+    line = re.sub(r"^[-*+]\s+", "", line.strip())
+    return line[1:-1].strip() if len(line) > 1 and line[0] == line[-1] == "`" else line
+
+
+def _unquote(s: str) -> str:
+    return s.strip().strip("\"\u201c\u201d'`").strip()
+
+
 def _norm(s: str) -> str:
     return " ".join(s.split())
 
@@ -18,11 +28,11 @@ def _norm(s: str) -> str:
 def parse(text: str) -> dict:
     out = {"moved": {}, "facts": [], "none": {}, "lines": []}
     for line in text.splitlines():
-        line = line.strip()
+        line = clean(line)
         if m := MOVED.match(line):
             out["moved"][m[1]] = m[2]
         elif m := FACT.match(line):
-            parts = [s.strip() for s in m[3].split("|", 1)]
+            parts = [_unquote(s) for s in m[3].split("|", 1)]
             if m[2] == "none":
                 out["none"][m[1]] = m[3]
             elif len(parts) == 2:
@@ -68,7 +78,9 @@ def _fact_problem(root: Path, cfg: dict, fact: dict, original: str) -> str | Non
 
 def check(root: Path, cfg: dict, deleted: list[str], snap: dict, after: dict, parsed: dict) -> list[str]:
     # a new request is never committed by Libraryan, so a doc "moved" there would be lost
-    new_blobs = {b for p, b in after.items() if b and snap.get(p) is None and is_protected(p, cfg)}
+    # existence re-checked: `after` predates the runner's Discard: removals
+    new_blobs = {b for p, b in after.items()
+                 if b and snap.get(p) is None and is_protected(p, cfg) and (Path(root) / p).is_file()}
     problems = []
     for path in deleted:
         if snap.get(path) and snap[path] in new_blobs:  # pure move

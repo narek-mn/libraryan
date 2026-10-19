@@ -49,6 +49,8 @@ if "rm_restore" in modes:  # deletion undone after a reviewer rejection
     Path("README.md").write_text(text)
 if "delete_doc" in modes:  # an owned doc deleted the way the agent does it
     subprocess.run(["git", "rm", "-q", "docs/old.md"], check=True)
+if "move_doc" in modes:  # an owned doc moved into the KB (then dropped via Discard:)
+    subprocess.run(["git", "mv", "docs/old.md", "docs/kb/old.md"], check=True)
 if "codeedit" in modes:  # the agent strays into code
     Path("app.py").write_text("x = 2\n")
     subprocess.run(["git", "rm", "-q", "--", "util.py"], check=True)

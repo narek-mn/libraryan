@@ -176,7 +176,7 @@ Your last message is stored as the run report and its first lines become the com
 
 After the headings, add the deletion ledger: for every owned doc you deleted or moved, one or more of these lines, exactly in this form:
 
-- `Moved: <old> => <new>` for a moved or renamed file whose content you also edited (a pure `git mv` with unchanged content needs no line). The new file must keep most of the old content.
+- `Moved: <old> => <new>` for a moved or renamed file whose content you also edited (a pure `git mv` with unchanged content needs no line). The new file must keep most of the old content. If you restructured it heavily, use Fact lines instead.
 - `Fact: <deleted> => <dest> | <quote from deleted> | <quote from dest>` for each still-valid fact you moved into another owned file, or that another owned file already holds (a duplicate). Copy both quotes verbatim from `git show HEAD:<deleted>` and from the destination as it is now; each at least 15 characters.
 - `Fact: <deleted> => none | <reason>` only when the file held no still-valid fact (for example an empty stub, or notes about code that no longer exists).
 

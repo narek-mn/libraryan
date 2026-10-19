@@ -351,7 +351,9 @@ def run(root: Path, cfg: dict, reason: str, extra_paths=()) -> int:
                 _unstage_new(root, staged_before, snap)
                 after = _snapshot(root, cfg)
                 diff = _libraryan_changes(snap, after)
-                for p in re.findall(r"^Discard: `?(.+?)`?\s*$", output, re.M):  # rejected new files only
+                discards = [m[1] for line in output.splitlines()
+                            if (m := re.match(r"Discard: `?(.+?)`?\s*$", ledger.clean(line)))]
+                for p in discards:  # rejected new files only
                     if p in diff and snap.get(p) is None:
                         (root / p).unlink(missing_ok=True)
                         diff.remove(p)

@@ -630,3 +630,14 @@ def test_run_commits_ledgered_deletion(repo, monkeypatch):
     latest = (state(repo) / "reports/latest.md").read_text()
     assert "## Deletion ledger\n\nFact: docs/old.md => none | empty stub" in latest
     assert last_trace(repo)["deleted"] == 1
+
+
+def test_run_fails_on_move_into_discarded_file(repo, monkeypatch):
+    cfg = make_kb(repo)
+    commit_old_doc(repo)
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "move_doc")
+    monkeypatch.setenv("FAKE_CLAUDE_EXTRA", "- Discard: `docs/kb/old.md`")
+    assert runner.run(repo, cfg, "manual") == 1
+    assert libraryan_commits(repo) == [] and "docs/old.md" in head_files(repo)
+    assert (repo / "docs/old.md").exists() and not (repo / "docs/kb/old.md").exists()
+    assert "deletion ledger: docs/old.md" in (state(repo) / "reports/latest.md").read_text()
