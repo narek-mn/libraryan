@@ -16,20 +16,27 @@ def parse_output(stdout: str) -> tuple[str, dict]:
         d = json.loads(stdout)
     except ValueError:
         return stdout, {}
-    if not isinstance(d, dict) or not isinstance(d.get("result"), str):
+    if not isinstance(d, dict):
         return stdout, {}
-    return d["result"], {v: d[k] for k, v in _USAGE.items() if k in d}
+    return d["result"] if isinstance(d.get("result"), str) else "", {v: d[k] for k, v in _USAGE.items() if k in d}
 
 
 def append(st: Path, record: dict) -> None:
-    with open(Path(st) / "runs.jsonl", "a") as f:
-        f.write(json.dumps({"ts": _ts(), **record}) + "\n")
+    try:  # the trace is bookkeeping: it must never fail or mask a run
+        with open(Path(st) / "runs.jsonl", "a") as f:
+            f.write(json.dumps({"ts": _ts(), **record}) + "\n")
+    except Exception:
+        pass
 
 
 def read(st: Path, since_ts: str | None = None) -> list[dict]:
     p = Path(st) / "runs.jsonl"
     out = []
-    for line in p.read_text().splitlines() if p.exists() else []:
+    try:
+        lines = p.read_text(errors="replace").splitlines()
+    except OSError:
+        lines = []
+    for line in lines:
         try:
             r = json.loads(line)
         except ValueError:

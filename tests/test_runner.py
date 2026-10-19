@@ -526,3 +526,12 @@ def test_nojson_output_still_works(repo, monkeypatch):
     t = last_trace(repo)
     assert t["outcome"] == "committed" and "cost_usd" not in t["calls"][0]
     assert "SUMMARY ok" in git(repo, "log", "-1", "--format=%b")
+
+
+def test_trace_failure_does_not_break_run(repo):
+    cfg = make_kb(repo)
+    add_request(repo)
+    (state(repo) / "runs.jsonl").mkdir(parents=True)
+    assert runner.run(repo, cfg, "manual") == 0
+    assert libraryan_commits(repo) == ["docs(libraryan): manual run"]
+    assert (state(repo) / "last_processed").exists()
