@@ -358,17 +358,28 @@ def test_init_malformed_settings_writes_nothing(repo):
     assert git(repo, "status", "--porcelain", "--ignored").stdout == ""
 
 
-def test_init_claude_md_symlink(repo):
-    (repo / "AGENTS.md").write_text("# Rules\n")
-    (repo / "CLAUDE.md").symlink_to("AGENTS.md")
+@pytest.mark.parametrize("link,target", [("CLAUDE.md", "AGENTS.md"), ("AGENTS.md", "CLAUDE.md")])
+def test_init_claude_md_symlink(repo, link, target):
+    (repo / target).write_text("# Rules\n")
+    (repo / link).symlink_to(target)
     git(repo, "add", "AGENTS.md", "CLAUDE.md")
     git(repo, "commit", "-m", "agents")
     assert install.init(repo, SRC, run_setup=False) == 0
-    assert (repo / "CLAUDE.md").is_symlink()
-    assert "@AGENTS.md" not in (repo / "AGENTS.md").read_text()
+    assert (repo / link).is_symlink()
+    text = (repo / target).read_text()
+    assert "@AGENTS.md" not in text and START in text
     assert config.load(repo)["claude_md_symlink"] is True
     work = {"requests": [], "since": None, "commits": 0, "health": True, "baseline": [], "extra": ["AGENTS.md"]}
-    assert "symlink" in runner.build_prompt("setup", work, config.load(repo))
+    p = runner.build_prompt("setup", work, config.load(repo))
+    assert "symlink" in p and "the `@AGENTS.md` line in CLAUDE.md exactly" not in p
+    assert "the `@AGENTS.md` line in CLAUDE.md exactly" in runner.build_prompt("setup", work, {})
+
+
+def test_init_setup_failure_prints_retry_hint(repo, monkeypatch, capsys):
+    monkeypatch.setattr(install.shutil, "which", lambda name: "/nonexistent/claude" if name == "claude" else None)
+    assert install.init(repo, SRC) == 1
+    assert subject(repo) == "docs(libraryan): install"
+    assert "run --reason setup" in capsys.readouterr().err
 
 
 def test_uninstall_refuses_dirty_targets(repo):

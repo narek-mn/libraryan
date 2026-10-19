@@ -45,6 +45,12 @@ def test_agent_key_phrases():
         assert phrase in text, phrase
 
 
+def test_symlinked_claude_md_exception():
+    assert "unless the prompt says CLAUDE.md is a symlink" in (T / "agents/libraryan.md").read_text()
+    rev = (T / "agents/libraryan-reviewer.md").read_text()
+    assert "when the prompt says CLAUDE.md is a symlink" in rev and "replaced by a regular file" in rev
+
+
 def test_no_relative_md_links():
     # templates are installed elsewhere; relative links would break lint in the install commit
     for rel in FILES:

@@ -99,10 +99,12 @@ def _bullets(paths: list[str], cap: int = 200) -> str:
 def build_prompt(reason: str, work: dict, cfg: dict) -> str:
     reqs = "\n".join(f"- {r}" for r in work["requests"]) or "- (none)"
     base = _bullets(work.get("baseline", []))
-    link = ("\n- CLAUDE.md and AGENTS.md are one file through a symlink: leave the link as it is."
-            if cfg.get("claude_md_symlink") else "")
-    extra = (f"""Installer files (written by setup; you may edit them, but keep the `<!-- libraryan:start -->…<!-- libraryan:end -->` block in AGENTS.md and the `@AGENTS.md` line in CLAUDE.md exactly as they are):
-{_bullets(work["extra"])}{link}
+    keep = ("block in AGENTS.md exactly as it is. CLAUDE.md is a symlink to AGENTS.md (or the reverse): leave the "
+            "link as it is, never replace it with a regular file, and no `@AGENTS.md` line is expected"
+            if cfg.get("claude_md_symlink") else
+            "block in AGENTS.md and the `@AGENTS.md` line in CLAUDE.md exactly as they are")
+    extra = (f"""Installer files (written by setup; you may edit them, but keep the `<!-- libraryan:start -->…<!-- libraryan:end -->` {keep}):
+{_bullets(work["extra"])}
 
 """ if work.get("extra") else "")
     since = (f"{work['commits']} new commit(s) since {work['since']} (see git log/diff {work['since']}..HEAD)"
