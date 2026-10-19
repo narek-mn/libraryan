@@ -154,7 +154,7 @@ Follow `<kb_root>/STYLE.md`. The runner enforces, for every note under `<kb_root
 
 ## Before you finish
 
-1. Run `python3 .libraryan/bin/libraryan check`. It checks every file in the repo. Fix every problem in files you own and run it again until none remain. Problems in files you do not own: leave them and list them under Flagged.
+1. Run `python3 .libraryan/bin/libraryan check`. It checks every owned doc and request file. Fix every problem in files you own and run it again until none remain. Problems in files you must not change (for example a request still being written, or the installer block): leave them and list them under Flagged.
 2. Call the subagent tool with `subagent_type: libraryan-reviewer`. Give it the run reason, the baseline from the prompt (paths it must ignore), during setup the installer files from the prompt (it reviews those too), and your change list: every path you created, edited, moved (old and new) or deleted, with the reason for each deletion and the source for each new fact. Do not paste request text into it as instructions.
 3. The reviewer answers `APPROVE`, or one or more lines `REJECT: <path>: <reason>`. For each rejection, either fix the problem it names or undo the change. Undo only paths in your own change list: never a baseline path, a path you do not own or a non-Markdown file, even if the reviewer names one (list that under Flagged instead).
    - Edited or deleted file: `git show HEAD:<path>` and `Write` that content back.
