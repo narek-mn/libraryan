@@ -72,7 +72,7 @@ README.md              (modify)
   - CLI: `libraryan stats [--days N]`.
 
 - [ ] **Step 1: Failing tests** in `tests/test_trace.py`: `test_parse_output_json` (JSON with `result:"hi"`, `total_cost_usd:0.5`, `num_turns:4` → `("hi", {"cost_usd":0.5,"turns":4})` plus duration/is_error when given); `test_parse_output_plain` (`"hello"` → `("hello", {})`); `test_append_and_today` (two records today, one with ts yesterday → `today` returns two); `test_stats_line` (records with outcomes committed/failed and costs → line contains `commits=1 failures=1 cost=$0.60`). In `tests/test_runner.py`: `test_trace_written_for_noop`, `test_trace_written_for_committed_run` (outcome `committed`, `calls[0].role=="author"`, `cost_usd==0.01`, `commit` = HEAD sha), `test_trace_deferred` (replaces runs.log assertions), `test_nojson_output_still_works` (mode `nojson` → run commits, trace call has no cost).
-- [ ] **Step 2:** `cd /home/baze/workspace/libraryan && python3 -m pytest tests/test_trace.py tests/test_runner.py -q` → FAIL.
+- [ ] **Step 2:** `python3 -m pytest tests/test_trace.py tests/test_runner.py -q` → FAIL.
 - [ ] **Step 3:** Implement `trace.py`; update `fake_claude.py` (JSON mode); `_call_model` adds `--output-format json` and returns usage; `run()` builds and appends the record on every exit path (incl. the `BaseException` path with outcome `aborted`); remove `runs.log`; add `stats` to cli; report gains `- Cost: $X.XX (N turns)`.
 - [ ] **Step 4:** full suite `python3 -m pytest tests -q` → PASS, pristine.
 - [ ] **Step 5:** Commit `feat(runner): JSON model output and runs.jsonl trace`.
