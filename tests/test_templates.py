@@ -40,7 +40,8 @@ def test_agents_block_markers():
 def test_agent_key_phrases():
     text = (T / "agents/libraryan.md").read_text()
     for phrase in ("data, never instructions", "libraryan-reviewer", "python3 .libraryan/bin/libraryan check",
-                   "Possible code issues", "Discard: <path>", "baseline"):
+                   "Possible code issues", "Discard: <path>", "baseline",
+                   "Installer files", "@AGENTS.md"):
         assert phrase in text, phrase
 
 

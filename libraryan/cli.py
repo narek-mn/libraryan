@@ -1,10 +1,11 @@
 import argparse
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 
-from . import cchooks, checks, config, gitutil, precommit, runner
+from . import cchooks, checks, config, gitutil, install, precommit, runner
 
 def _precommit() -> int:
     root = gitutil.repo_root(Path.cwd())
@@ -68,5 +69,15 @@ def main(argv: list[str]) -> int:
         for p in problems:
             print(p)
         return 1 if problems else 0
-    print("usage: libraryan <run|wait|precommit|postcommit|check|guard|ensure-hooks>", file=sys.stderr)
+    if cmd == "upgrade":  # run the source checkout's own installer so new install logic applies
+        root = gitutil.repo_root(Path.cwd())
+        source = config.load(root).get("source_path")
+        if not source or not (Path(source) / "libraryan.py").is_file():
+            print(f"libraryan: source checkout not found at {source!r} (source_path in config)", file=sys.stderr)
+            return 1
+        return subprocess.run([sys.executable, str(Path(source) / "libraryan.py"), "upgrade"], cwd=root).returncode
+    if cmd == "uninstall":
+        return install.uninstall(gitutil.repo_root(Path.cwd()))
+    print("usage: libraryan <run|wait|precommit|postcommit|check|guard|ensure-hooks|upgrade|uninstall>",
+          file=sys.stderr)
     return 2
