@@ -24,6 +24,7 @@ DEFAULTS = {
     "max_runs_per_day": 24,
     "max_commits_per_day": 12,
     "max_consecutive_failures": 3,
+    "max_consecutive_transient_failures": 10,
     "language": "en",
     "owned": ["**/*.md", ".claude/skills/**", ".cursor/rules/**", ".github/copilot-instructions.md"],
     "excluded": ["**/node_modules/**", "**/vendor/**", "**/fixtures/**", "**/testdata/**", "**/templates/**", "**/.venv/**"],

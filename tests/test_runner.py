@@ -936,3 +936,34 @@ def test_transient_failures_not_in_streak(repo):
     assert runner.cap_hit(state(repo), cfg) is None
     prewrite(repo, 1, outcome="failed", calls=[])
     assert runner.cap_hit(state(repo), cfg) == "max_consecutive_failures"
+
+
+def test_manual_run_not_capped_when_index_missing(repo):
+    cfg = make_kb(repo)
+    git(repo, "rm", "-q", "docs/kb/index.md")
+    git(repo, "commit", "-m", "rm index", env={"LIBRARYAN": "1"})
+    prewrite(repo, 24, outcome="committed", calls=[{"role": "author"}])
+    runner.run(repo, cfg, "manual")
+    assert (state(repo) / "fake_claude_ran").exists() and last_trace(repo)["outcome"] != "capped"
+
+
+def test_transient_streak_cap(repo):
+    cfg = make_kb(repo)
+    assert cfg["max_consecutive_transient_failures"] == 10
+    prewrite(repo, 9, outcome="failed", calls=[], transient=True)
+    assert runner.cap_hit(state(repo), cfg) is None
+    prewrite(repo, 1, outcome="aborted", calls=[], transient=True)
+    assert runner.cap_hit(state(repo), cfg) == "max_consecutive_transient_failures"
+    prewrite(repo, 1, outcome="noop", calls=[])  # skipped, streak stays
+    assert runner.cap_hit(state(repo), cfg) == "max_consecutive_transient_failures"
+    prewrite(repo, 1, outcome="committed", calls=[])  # a success resets both
+    assert runner.cap_hit(state(repo), cfg) is None
+
+
+def test_transient_failures_count_toward_total_streak(repo):
+    cfg = make_kb(repo)
+    prewrite(repo, 5, outcome="failed", calls=[], transient=True)
+    prewrite(repo, 5, outcome="failed", calls=[])
+    assert runner.cap_hit(state(repo), cfg) == "max_consecutive_failures"
+    cfg["max_consecutive_failures"] = 99
+    assert runner.cap_hit(state(repo), cfg) == "max_consecutive_transient_failures"

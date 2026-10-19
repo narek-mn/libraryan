@@ -293,14 +293,17 @@ def cap_hit(st: Path, cfg: dict) -> str | None:
         return "max_runs_per_day"
     if sum(r.get("outcome") == "committed" for r in recs) >= cfg["max_commits_per_day"]:
         return "max_commits_per_day"
-    fails = 0
+    fails = all_fails = 0  # all_fails also counts transient failures (another agent's edit), at a higher threshold
     for r in reversed(trace.read(st)):  # trailing, across days
-        if r.get("outcome") in ("noop", "deferred", "capped", "audited") or r.get("transient"):
-            continue  # another agent's concurrent edit is not Libraryan failing
+        if r.get("outcome") in ("noop", "deferred", "capped", "audited"):
+            continue
         if r.get("outcome") not in ("failed", "aborted"):
             break
-        fails += 1
-    return "max_consecutive_failures" if fails >= cfg["max_consecutive_failures"] else None
+        all_fails += 1
+        fails += not r.get("transient")
+    if fails >= cfg["max_consecutive_failures"]:
+        return "max_consecutive_failures"
+    return "max_consecutive_transient_failures" if all_fails >= cfg["max_consecutive_transient_failures"] else None
 
 
 def _trace(st: Path, reason: str, head: str, outcome: str, calls=(), changed=(), deleted=(),
@@ -338,6 +341,7 @@ def run(root: Path, cfg: dict, reason: str, extra_paths=()) -> int:
             if not _on_default(root, cfg):
                 _trace(st, reason, _head_or_none(root), "deferred")
                 return 0
+            exempt = reason in ("manual", "setup")  # before promotion: a manual run stays manual
             promoted = (reason != "setup" and not (root / cfg["kb_root"].strip("/") / "index.md").exists()
                         and not _backed_off(st, reason, gitutil.head(root)))
             if promoted:  # no knowledge base yet (e.g. the setup run failed or was interrupted)
@@ -360,8 +364,8 @@ def run(root: Path, cfg: dict, reason: str, extra_paths=()) -> int:
                 (st / "last_health_head").write_text(work["head"] + "\n")
                 _trace(st, reason, work["head"], "audited", findings=fnd)
                 return 0
-            # --- daily cap check (manual and explicit setup runs ignore it; a promoted setup does not) ---
-            cap = None if reason == "manual" or (reason == "setup" and not promoted) else cap_hit(st, cfg)
+            # --- daily cap check (manual and explicit setup runs ignore it; an automatic run promoted to setup does not) ---
+            cap = None if exempt else cap_hit(st, cfg)
             if cap:
                 line = CAP_LINE.format(cap)
                 _report(st, reason, work, [], [], line, latest=False)

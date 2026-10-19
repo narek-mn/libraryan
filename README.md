@@ -57,7 +57,7 @@ Independent review (`independent_review`, on by default): when a run has changes
 
 A model call that reports `is_error: true` in its JSON output (for example, its budget ran out mid-run) counts as failed even when it exits 0: the author's run fails and its work is not marked processed; a reviewer reporting it rejects.
 
-Daily caps: an automatic run is skipped (outcome `capped`) once the UTC day has `max_runs_per_day` model runs or `max_commits_per_day` commits, or the last `max_consecutive_failures` runs failed or aborted. Failures caused only by another agent's concurrent edits (non-owned paths changed, or files changed during the review) are traced with `"transient": true` and neither extend nor reset that streak. A capped run keeps the previous `reports/latest.md` (the report that tripped the cap) and appends the cap line to it. `python3 .libraryan/bin/libraryan run` (reason `manual`) and an explicit setup (`init`, `run --reason setup`) ignore the caps. A run that becomes a setup run because `<kb_root>/index.md` is missing (e.g. the first setup failed) is capped like any automatic run. Each model call also gets `--max-budget-usd` (`max_usd_run`, `max_usd_setup`, `max_usd_review`, `max_usd_review_setup`).
+Daily caps: an automatic run is skipped (outcome `capped`) once the UTC day has `max_runs_per_day` model runs or `max_commits_per_day` commits, or the last `max_consecutive_failures` runs failed or aborted, or the last `max_consecutive_transient_failures` did. Failures caused only by another agent's concurrent edits (non-owned paths changed, or files changed during the review) are traced with `"transient": true`; they do not count toward the first streak (and do not reset it) but do count toward the second, higher one. A capped run keeps the previous `reports/latest.md` (the report that tripped the cap) and appends the cap line to it. `python3 .libraryan/bin/libraryan run` (reason `manual`) and an explicit setup (`init`, `run --reason setup`) ignore the caps. A run that becomes a setup run because `<kb_root>/index.md` is missing (e.g. the first setup failed) is capped like any automatic run. Each model call also gets `--max-budget-usd` (`max_usd_run`, `max_usd_setup`, `max_usd_review`, `max_usd_review_setup`).
 
 ## Commands
 
@@ -88,12 +88,13 @@ Without a project install, `python3 ~/libraryan/libraryan.py {init,upgrade,unins
 | `claude_bin` / `model` | `claude` / `null` | Claude Code binary and model |
 | `debounce_minutes` | `10` | Quiet time after a commit before a run |
 | `run_timeout_minutes` | `30` | Kill a run after this long |
-| `setup_timeout_minutes` | `120` | Same, for the setup run |
+| `setup_timeout_minutes` | `120` | Same, for the setup run; applies to the author and the reviewer each (up to 2× in total) |
 | `max_usd_run` / `max_usd_setup` / `max_usd_review` | `5` / `25` / `2` | Per-call budget passed to `claude --max-budget-usd` (run, setup, reviewer) |
 | `max_usd_review_setup` | `10` | Reviewer budget on a setup run |
 | `max_runs_per_day` | `24` | Daily cap on runs that call the model |
 | `max_commits_per_day` | `12` | Daily cap on Libraryan commits |
 | `max_consecutive_failures` | `3` | Stop automatic runs after this many failed or aborted runs in a row (transient failures excluded) |
+| `max_consecutive_transient_failures` | `10` | Same, counting transient failures too |
 | `independent_review` | `true` | Run the reviewer before every commit |
 | `reviewer_model` | `null` | Model for the reviewer (falls back to `model`) |
 | `review_timeout_minutes` | `15` | Kill a reviewer call after this long (setup runs use `setup_timeout_minutes`) |

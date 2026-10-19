@@ -90,9 +90,10 @@ The reviewer template changes its input section to "you receive" rather than "Li
 - **Daily caps.** Read from today's trace lines (§5.4) before any model call:
   - `max_runs_per_day` (default 24): runs that called the model;
   - `max_commits_per_day` (default 12);
-  - `max_consecutive_failures` (default 3): trailing failed or aborted runs.
-- **When a cap is hit**, a non-manual, non-setup run stops before the model is called. It writes a trace line with outcome `capped` and the cap's name, and appends to the report the line "Daily cap reached: …; run `libraryan run` to override".
-- **Manual and setup runs** ignore the daily caps but not the per-call caps.
+  - `max_consecutive_failures` (default 3): trailing failed or aborted runs, not counting transient ones (another agent's concurrent edit);
+  - `max_consecutive_transient_failures` (default 10): trailing failed or aborted runs, transient or not.
+- **When a cap is hit**, a run other than manual or explicit setup (`init`, `run --reason setup`); a setup promoted because index.md is missing is capped, stops before the model is called. It writes a trace line with outcome `capped` and the cap's name, and appends to the report the line "Daily cap reached: …; run `python3 .libraryan/bin/libraryan run` to override".
+- **Manual runs and explicit setup** ignore the daily caps but not the per-call caps.
 
 ### 5.4 Run trace (WP §5.1)
 
