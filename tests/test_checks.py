@@ -1,0 +1,56 @@
+from libraryan import checks, config
+
+FM = "---\ntitle: T\ntype: note\nupdated: 2026-01-01\nsources: []\n---\n"
+
+
+def mk(root, rel, text):
+    p = root / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(text)
+
+
+def lint(root, files):
+    return checks.lint(root, config.load(root), files)
+
+
+def test_lint_missing_frontmatter(tmp_path):
+    mk(tmp_path, "docs/kb/a.md", FM.replace("sources: []\n", ""))
+    mk(tmp_path, "docs/kb/index.md", "[a](a.md)\n")
+    out = lint(tmp_path, ["docs/kb/a.md"])
+    assert len(out) == 1 and "sources" in out[0] and out[0].startswith("docs/kb/a.md: ")
+
+
+def test_lint_broken_link(tmp_path):
+    mk(tmp_path, "README.md", "[x](nope.md#top)\n[ok](https://x.io/a.md)\n")
+    out = lint(tmp_path, ["README.md", "gone.md"])
+    assert len(out) == 1 and "nope.md" in out[0]
+
+
+def test_lint_link_with_spaces_ok(tmp_path):
+    mk(tmp_path, "README.md", "[x](My%20Note.md)\n")
+    mk(tmp_path, "My Note.md", "hi\n")
+    assert lint(tmp_path, ["README.md"]) == []
+
+
+def test_lint_index_coverage(tmp_path):
+    mk(tmp_path, "docs/kb/a.md", FM)
+    mk(tmp_path, "docs/kb/b.md", FM)
+    mk(tmp_path, "docs/kb/index.md", "[a](a.md)\n")
+    out = lint(tmp_path, ["docs/kb/a.md", "docs/kb/b.md", "docs/kb/index.md"])
+    assert len(out) == 1 and out[0].startswith("docs/kb/b.md") and "index" in out[0]
+
+
+def test_lint_ignores_frontmatter_outside_kb(tmp_path):
+    mk(tmp_path, "README.md", "# hi\n")
+    assert lint(tmp_path, ["README.md"]) == []
+
+
+def test_secrets_detects_aws_key(tmp_path):
+    mk(tmp_path, "a.txt", "key=AKIAABCDEFGHIJKLMNOP\n")
+    out = checks.scan_secrets(tmp_path, ["a.txt"])
+    assert len(out) == 1 and out[0].startswith("a.txt: ")
+
+
+def test_secrets_clean_file(tmp_path):
+    mk(tmp_path, "a.txt", "nothing here\n")
+    assert checks.scan_secrets(tmp_path, ["a.txt", "missing.txt"]) == []
