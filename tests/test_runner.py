@@ -751,6 +751,8 @@ def test_commit_failure_backs_off(repo, monkeypatch):
 
 def test_clean_health_run_skips_model(repo):
     cfg = make_kb(repo)
+    state(repo).mkdir()
+    (state(repo) / "last_processed").write_text(git(repo, "rev-parse", "HEAD"))
     assert runner.run(repo, cfg, "daily") == 0
     assert not (state(repo) / "fake_claude_ran").exists()
     t = last_trace(repo)
@@ -762,6 +764,7 @@ def test_clean_health_run_skips_model(repo):
 def test_clean_health_run_not_capped(repo):
     cfg = make_kb(repo)
     prewrite(repo, cfg["max_runs_per_day"], outcome="nothing_changed", calls=[{"role": "author"}])
+    (state(repo) / "last_processed").write_text(git(repo, "rev-parse", "HEAD"))
     runner.run(repo, cfg, "daily")
     assert last_trace(repo)["outcome"] == "audited"
 
@@ -787,3 +790,11 @@ def test_cli_audit(repo):
     (repo / "README.md").write_text("# test\n`src/gone.py`\n")
     r = subprocess.run([str(repo / ".libraryan/bin/libraryan"), "audit"], cwd=repo, capture_output=True, text=True)
     assert r.returncode == 0 and r.stdout == "missing-path README.md: src/gone.py\n"
+
+
+def test_missing_last_processed_still_calls_model(repo):
+    cfg = make_kb(repo)  # clean KB, but no record of which commits were processed (fresh clone)
+    head = git(repo, "rev-parse", "HEAD").strip()
+    assert runner.run(repo, cfg, "daily") == 0
+    assert (state(repo) / "fake_claude_ran").exists()
+    assert (state(repo) / "last_processed").read_text().strip() == head

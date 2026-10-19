@@ -13,7 +13,7 @@ EXTS = set(".py .js .ts .tsx .jsx .go .rs .java .kt .c .h .cpp .hpp .cs .rb .php
 MAX_BYTES = 2_000_000  # a huge doc is audited on its head only
 FENCE = re.compile(r"```.*?(?:```|\Z)", re.S)
 TICK = re.compile(r"`([^`\n]+)`")
-SUFFIX = re.compile(r"(?:#L\d+(?:-L?\d+)?|:\d+(?:-\d+)?)$")
+SUFFIX = re.compile(r"(?:#L\d+(?:-L?\d+)?|:\d+(?:-\d+)?|:[A-Za-z_][\w.]*)$")  # #L12, :12, :symbol
 DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 
@@ -54,15 +54,18 @@ def run(root: Path, cfg: dict) -> list[Finding]:
     root, kb = Path(root), cfg["kb_root"].strip("/")
     files = sorted(set(p for p in gitutil.git(root, "ls-files", "-z", "-co", "--exclude-standard").split("\0") if p))
     listed = set(files)
-    names = {posixpath.basename(p) for p in files}
+    names: dict[str, str] = {}
+    for p in files:
+        names.setdefault(posixpath.basename(p), p)
     dates: dict[str, str] = {}
 
-    def exists(tok: str, rel: str) -> bool:
+    def resolve(tok: str, rel: str) -> str | None:
+        """Repo-relative path `tok` names, or None if it names nothing inside the repo."""
         t = SUFFIX.sub("", tok.strip()).rstrip("/")
         if "/" not in t:  # bare file name: any file of that name counts
-            return t in names or (root / t).exists()
-        cands = {posixpath.normpath(t), posixpath.normpath(posixpath.join(posixpath.dirname(rel), t))}
-        return any(c in listed or (root / c).exists() for c in cands)
+            return names.get(t) or (t if (root / t).exists() else None)
+        cands = [posixpath.normpath(t), posixpath.normpath(posixpath.join(posixpath.dirname(rel), t))]
+        return next((c for c in cands if not c.startswith("..") and (c in listed or (root / c).exists())), None)
 
     def last_change(src: str) -> str:
         if src not in dates:  # ponytail: one git log per distinct source; batch if KBs grow to thousands
@@ -86,7 +89,7 @@ def run(root: Path, cfg: dict) -> list[Finding]:
             continue
         out += [("broken-link", rel, raw) for raw, res in checks._links(root, rel, text) if not (root / res).exists()]
         out += [("missing-path", rel, tok) for tok in TICK.findall(FENCE.sub("", text))
-                if looks_like_path(tok) and not exists(tok, rel)]
+                if looks_like_path(tok) and not resolve(tok, rel)]
         if not rel.startswith(kb + "/") or posixpath.basename(rel) in checks.SPECIAL:
             continue
         fm = frontmatter(text)
@@ -99,9 +102,9 @@ def run(root: Path, cfg: dict) -> list[Finding]:
         for src in sources:
             if not looks_like_path(src):
                 continue  # `commit <sha>`, URLs, prose
-            if not exists(src, rel):
+            if not (path := resolve(src, rel)):
                 out.append(("missing-source", rel, src))
-            elif updated and (d := last_change(SUFFIX.sub("", src))) > updated.group():
+            elif updated and (d := last_change(path)) > updated.group():
                 out.append(("stale", rel, f"{src} changed {d}, note updated {updated.group()}"))
         title = fm.get("title")
         if isinstance(title, str) and title.strip():

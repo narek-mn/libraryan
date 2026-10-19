@@ -337,7 +337,7 @@ def run(root: Path, cfg: dict, reason: str, extra_paths=()) -> int:
                 work["audit"] = [("error", "audit", repr(e))]
             # a clean health check with nothing else to do is free: no model call, so never capped
             if (work["health"] and not work["requests"] and not work["commits"] and reason not in ("manual", "setup")
-                    and not work["audit"]):
+                    and work["since"] and not work["audit"]):  # no since: one model run records last_processed
                 (st / "last_health").write_text(str(_now()))
                 (st / "last_health_head").write_text(work["head"] + "\n")
                 _trace(st, reason, work["head"], "audited")

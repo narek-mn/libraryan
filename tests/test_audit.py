@@ -114,3 +114,20 @@ def test_fresh_install_is_clean(repo):
     (repo / "docs/kb").mkdir(parents=True)
     (repo / "docs/kb/index.md").write_text("# Index\n")
     assert audit.run(repo, config.load(repo)) == []
+
+
+def test_doc_relative_source_is_stale_checked(repo):
+    cfg = kb(repo, {"a.md": note(updated="2020-01-01", sources="../../src/app.py")})
+    assert [f[:2] for f in audit.run(repo, cfg)] == [("stale", "docs/kb/a.md")]
+
+
+def test_path_outside_repo_is_missing(repo):
+    outside = repo.parent / "outside.py"
+    outside.write_text("x\n")
+    cfg = kb(repo, {"a.md": note(body="`../../../outside.py`\n")})
+    assert audit.run(repo, cfg) == [("missing-path", "docs/kb/a.md", "../../../outside.py")]
+
+
+def test_path_with_symbol_suffix(repo):
+    cfg = kb(repo, {"a.md": note(body="`src/app.py:main` and `src/app.py:App.run`\n")})
+    assert audit.run(repo, cfg) == []
