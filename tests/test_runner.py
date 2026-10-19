@@ -392,3 +392,36 @@ def test_cli_check_owned_files_only_non_ascii(repo):
                        text=True)
     assert r.returncode == 1 and "docs/գիտելիք.md: broken link nope.md" in r.stdout
     assert "fixtures/f.md" not in r.stdout
+
+
+def test_failed_run_backs_off_until_head_moves(repo, monkeypatch):
+    cfg = make_kb(repo)
+    commit_request(repo)
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "badnote")
+    assert runner.run(repo, cfg, "commit") == 1
+    assert (state(repo) / "last_failed").read_text().strip() == git(repo, "rev-parse", "HEAD").strip()
+    monkeypatch.delenv("FAKE_CLAUDE_MODE")
+    (state(repo) / "fake_claude_ran").unlink()
+    for reason in ("commit", "daily", "rerun"):
+        assert runner.run(repo, cfg, reason) == 0
+    assert not (state(repo) / "fake_claude_ran").exists()  # same HEAD: no paid retry
+    assert runner.run(repo, cfg, "manual") == 0
+    assert (state(repo) / "fake_claude_ran").exists() and not (state(repo) / "last_failed").exists()
+
+
+def test_missing_index_promotes_to_setup(repo):
+    cfg = make_kb(repo)
+    git(repo, "rm", "-q", "docs/kb/index.md")
+    git(repo, "commit", "-m", "rm index", env={"LIBRARYAN": "1"})
+    (repo / "docs/kb").mkdir(parents=True)  # fake claude writes into it
+    assert runner.run(repo, cfg, "commit") == 0
+    assert "Reason: setup" in (state(repo) / "fake_claude_prompt").read_text()
+    assert libraryan_commits(repo) == ["docs(libraryan): setup run"]
+
+
+def test_daily_health_skipped_on_idle_repo(repo):
+    cfg = make_kb(repo)
+    assert runner.run(repo, cfg, "daily") == 0
+    (state(repo) / "fake_claude_ran").unlink()
+    assert runner.run(repo, cfg, "daily") == 0
+    assert not (state(repo) / "fake_claude_ran").exists()

@@ -69,8 +69,15 @@ def wait(root: Path, cfg: dict) -> None:
     run(root, cfg, "commit")
 
 
+def _backed_off(st: Path, reason: str, head: str) -> bool:
+    """A run failed at this HEAD: only a manual or setup run retries it (no paid retry loop)."""
+    return reason not in ("manual", "setup") and _read(st / "last_failed") == head
+
+
 def find_work(root: Path, cfg: dict, reason: str) -> dict:
-    st = _state(root)
+    st, head = _state(root), gitutil.head(root)
+    if _backed_off(st, reason, head):
+        return {"requests": [], "since": None, "commits": 0, "health": False, "head": head}
     # committed or staged only: an untracked request is still being written and must not trigger a paid run
     requests = sorted(p for p in _ls_files(root, "--", ".libraryan/requests")
                       if posixpath.basename(p) != ".gitkeep" and (Path(root) / p).is_file())
@@ -82,8 +89,10 @@ def find_work(root: Path, cfg: dict, reason: str) -> dict:
         commits = int(gitutil.git(root, "rev-list", "--count", "--invert-grep", "--grep=^docs(libraryan):",
                                   f"{since}..HEAD"))
     last_health = float(_read(st / "last_health") or 0)
-    health = reason in ("daily", "setup") or _now() - last_health >= 24 * 3600
-    return {"requests": requests, "since": since, "commits": commits, "health": health, "head": gitutil.head(root)}
+    # an idle repo (nothing committed since the last health check) gets no paid health run
+    health = ((reason in ("daily", "setup") or _now() - last_health >= 24 * 3600)
+              and (reason in ("manual", "setup") or _read(st / "last_health_head") != head))
+    return {"requests": requests, "since": since, "commits": commits, "health": health, "head": head}
 
 
 def _bullets(paths: list[str], cap: int = 200) -> str:
@@ -274,6 +283,9 @@ def run(root: Path, cfg: dict, reason: str, extra_paths=()) -> int:
             if not _on_default(root, cfg):
                 _defer(st, reason, cfg)
                 return 0
+            if (reason != "setup" and not (root / cfg["kb_root"].strip("/") / "index.md").exists()
+                    and not _backed_off(st, reason, gitutil.head(root))):
+                reason = "setup"  # no knowledge base yet (e.g. the setup run failed or was interrupted)
             work = find_work(root, cfg, reason)
             if not (work["requests"] or work["commits"] or work["health"] or reason == "setup"):
                 return 0
@@ -324,6 +336,7 @@ def run(root: Path, cfg: dict, reason: str, extra_paths=()) -> int:
                 if problems:
                     _restore(root, snap, diff)
                     _report(st, reason, work, changed, problems, output)
+                    (st / "last_failed").write_text(work["head"] + "\n")
                     return 1
             except BaseException as e:  # Ctrl-C, a crash, a failed restore: leave no half-done run behind
                 try:
@@ -331,11 +344,14 @@ def run(root: Path, cfg: dict, reason: str, extra_paths=()) -> int:
                     _restore(root, snap, _libraryan_changes(snap, _snapshot(root, cfg)))
                 finally:
                     _report(st, reason, work, [], [f"run aborted: {e!r}"], output)
+                    (st / "last_failed").write_text(work["head"] + "\n")
                 raise
             _report(st, reason, work, changed, problems, output)
             (st / "last_processed").write_text(work["head"] + "\n")  # commits made during the run stay new work
+            (st / "last_failed").unlink(missing_ok=True)
             if work["health"]:
                 (st / "last_health").write_text(str(_now()))
+                (st / "last_health_head").write_text(gitutil.head(root) + "\n")  # after its own commit
             if not (st / "rerun").exists():
                 return 0
             reason = "rerun"
