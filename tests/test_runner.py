@@ -730,3 +730,12 @@ def test_reviewer_args(repo):
     review.run_review(repo, {**cfg, "reviewer_model": "m-review"}, "manual", ["a.md"], {"baseline": []}, [],
                       lambda cmd, root, timeout: cmds.append(cmd) or ("APPROVE", [], {}), lambda r, c: {})
     assert cmds[0][cmds[0].index("--model") + 1] == "m-review"
+
+
+def test_commit_failure_backs_off(repo, monkeypatch):
+    cfg = make_kb(repo)
+    add_request(repo)
+    monkeypatch.setattr(runner, "_commit", lambda *a: "git add/commit failed: hook rejected")
+    assert runner.run(repo, cfg, "manual") == 1
+    assert (state(repo) / "last_failed").read_text().strip() == git(repo, "rev-parse", "HEAD").strip()
+    assert "hook rejected" in (state(repo) / "reports/latest.md").read_text()

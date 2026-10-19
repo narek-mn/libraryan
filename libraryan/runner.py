@@ -16,6 +16,7 @@ ALLOWED_TOOLS = ("Read,Edit,Write,Glob,Grep,Task,Agent,Bash(git log:*),Bash(git 
                  "Bash(git status:*),Bash(git rm:*),Bash(git mv:*),Bash(python3 .libraryan/bin/libraryan check:*)")
 
 STATE = ".libraryan/state"
+FOREIGN = "non-owned paths changed"
 SYMLINK_NOTE = ("CLAUDE.md is a symlink to AGENTS.md (or the reverse): leave the link as it is, never replace it "
                 "with a regular file, and no `@AGENTS.md` line is expected")
 _now = time.time
@@ -384,16 +385,16 @@ def run(root: Path, cfg: dict, reason: str, extra_paths=()) -> int:
                 # stray edit. Those paths are reported, never restored (they may be someone's work).
                 foreign = sorted(p for p in set(_baseline(root)) - dirty_before - set(diff)
                                  if not is_request(p) and not p.startswith(STATE + "/"))
-                # only another agent's edit (or one indistinguishable from it): retry at this HEAD
-                transient = all(p.startswith(review.MODIFIED) for p in problems)
                 if foreign:
-                    problems.append(f"non-owned paths changed: {', '.join(foreign)}")
+                    problems.append(f"{FOREIGN}: {', '.join(foreign)}")
                 if changed and not problems:
                     err = _commit(root, changed, reason, output)
                     if err:
                         gitutil.git(root, "reset", "-q", "--", *changed, check=False)
                         problems.append(err)
                 if problems:
+                    # only another agent's edit (or one indistinguishable from it): retry at this HEAD
+                    transient = all(p.startswith((review.MODIFIED, FOREIGN)) for p in problems)
                     _restore(root, snap, diff)
                     _report(st, reason, work, changed, problems, output, calls, parsed["lines"])
                     if not transient:
