@@ -2,6 +2,7 @@
 import os
 import sys
 
+sys.dont_write_bytecode = True  # no __pycache__ in .libraryan/ (owned path, would be committed)
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 from libraryan.cli import main  # noqa: E402
 

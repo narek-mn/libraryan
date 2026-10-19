@@ -1,9 +1,10 @@
+import argparse
 import json
 import os
 import sys
 from pathlib import Path
 
-from . import cchooks, checks, config, gitutil, precommit
+from . import cchooks, checks, config, gitutil, precommit, runner
 
 def _precommit() -> int:
     root = gitutil.repo_root(Path.cwd())
@@ -41,7 +42,21 @@ def main(argv: list[str]) -> int:
             pass
         return 0
     if cmd == "postcommit":
-        return 0  # Task 5 fills this in
+        try:
+            root = gitutil.repo_root(Path.cwd())
+            runner.post_commit(root, config.load(root), dict(os.environ))
+        except Exception:  # never fail the user's commit
+            pass
+        return 0
+    if cmd == "run":
+        ap = argparse.ArgumentParser(prog="libraryan run")
+        ap.add_argument("--reason", default="manual")
+        root = gitutil.repo_root(Path.cwd())
+        return runner.run(root, config.load(root), ap.parse_args(argv[1:]).reason)
+    if cmd == "wait":
+        root = gitutil.repo_root(Path.cwd())
+        runner.wait(root, config.load(root))
+        return 0
     if cmd == "chainpath":
         root = gitutil.repo_root(Path.cwd())
         print(config.load(root)["chain_hooks_path"] or "")
@@ -53,5 +68,5 @@ def main(argv: list[str]) -> int:
         for p in problems:
             print(p)
         return 1 if problems else 0
-    print("usage: libraryan <precommit|postcommit|check|guard|ensure-hooks>", file=sys.stderr)
+    print("usage: libraryan <run|wait|precommit|postcommit|check|guard|ensure-hooks>", file=sys.stderr)
     return 2
