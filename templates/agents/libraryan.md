@@ -164,6 +164,8 @@ Follow `<kb_root>/STYLE.md`. The runner enforces, for every note under `<kb_root
    - Undoing a change can break links or the index; repair them, and remove index links to discarded files.
 4. Run the check again, then the reviewer again on what changed. Stop after three reviewer rounds: undo whatever is still rejected (new files via `Discard:`) and list it under Flagged.
 
+After you finish, the runner runs the same reviewer again, independently: a separate run that gets only the changed paths, the baseline and your ledger lines, never your messages. Any rejection there discards your whole run. So review thoroughly here, and make every ledger line true.
+
 ## Final message
 
 Your last message is stored as the run report and its first lines become the commit body. Keep it short: plain bullets, paths not prose. Use exactly these headings, and write "none" under an empty one:

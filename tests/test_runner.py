@@ -487,7 +487,8 @@ def test_trace_written_for_committed_run(repo):
     assert t["outcome"] == "committed" and t["calls"][0]["role"] == "author"
     assert t["calls"][0]["cost_usd"] == 0.01 and t["commit"] == git(repo, "rev-parse", "HEAD").strip()
     assert t["changed"] >= 1 and t["problems"] == 0 and t["cap"] is None
-    assert "- Cost: $0.01 (3 turns)" in (state(repo) / "reports/latest.md").read_text()
+    assert t["calls"][1]["role"] == "reviewer"
+    assert "- Cost: $0.02 (4 turns)" in (state(repo) / "reports/latest.md").read_text()  # author + reviewer
     assert not (state(repo) / "runs.log").exists()
 
 
@@ -641,3 +642,58 @@ def test_run_fails_on_move_into_discarded_file(repo, monkeypatch):
     assert libraryan_commits(repo) == [] and "docs/old.md" in head_files(repo)
     assert (repo / "docs/old.md").exists() and not (repo / "docs/kb/old.md").exists()
     assert "deletion ledger: docs/old.md" in (state(repo) / "reports/latest.md").read_text()
+
+
+def test_reviewer_reject_fails_run(repo, monkeypatch):
+    cfg = make_kb(repo)
+    add_request(repo)
+    monkeypatch.setenv("FAKE_REVIEW", "REJECT: docs/kb/index.md: wrong")
+    assert runner.run(repo, cfg, "manual") == 1
+    assert libraryan_commits(repo) == [] and (repo / "docs/kb/index.md").read_text() == "# Index\n"
+    assert "review: REJECT: docs/kb/index.md: wrong" in (state(repo) / "reports/latest.md").read_text()
+    assert [c["role"] for c in last_trace(repo)["calls"]] == ["author", "reviewer"]
+
+
+def test_reviewer_edit_rejected(repo, monkeypatch):
+    cfg = make_kb(repo)
+    add_request(repo)
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "review_edits")
+    assert runner.run(repo, cfg, "manual") == 1
+    assert libraryan_commits(repo) == [] and (repo / "docs/kb/index.md").read_text() == "# Index\n"
+    assert "review: reviewer modified files" in (state(repo) / "reports/latest.md").read_text()
+
+
+def test_reviewer_failure_rejects(repo, monkeypatch):
+    cfg = make_kb(repo)
+    add_request(repo)
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "review_fail")
+    assert runner.run(repo, cfg, "manual") == 1
+    assert libraryan_commits(repo) == [] and (repo / "docs/kb/index.md").read_text() == "# Index\n"
+    assert "review: reviewer call failed:" in (state(repo) / "reports/latest.md").read_text()
+    assert (state(repo) / "last_failed").exists()
+
+
+def test_review_disabled(repo):
+    cfg = make_kb(repo)
+    cfg["independent_review"] = False
+    add_request(repo)
+    assert runner.run(repo, cfg, "manual") == 0
+    assert libraryan_commits(repo) == ["docs(libraryan): manual run"]
+    assert not (state(repo) / "fake_review_argv").exists()
+    assert [c["role"] for c in last_trace(repo)["calls"]] == ["author"]
+
+
+def test_reviewer_args(repo):
+    from libraryan import review
+    cfg = make_kb(repo)
+    cfg["model"] = "m-author"
+    add_request(repo)
+    assert runner.run(repo, cfg, "manual") == 0
+    a = json.loads((state(repo) / "fake_review_argv").read_text())
+    assert a[a.index("--agent") + 1] == "libraryan-reviewer" and a[a.index("--max-budget-usd") + 1] == "2"
+    assert a[a.index("--allowedTools") + 1] == review.REVIEW_TOOLS
+    assert a[a.index("--permission-mode") + 1] == "default" and a[a.index("--model") + 1] == "m-author"
+    cmds = []
+    review.run_review(repo, {**cfg, "reviewer_model": "m-review"}, "manual", ["a.md"], {"baseline": []}, [],
+                      lambda cmd, root, timeout: cmds.append(cmd) or ("APPROVE", [], {}), lambda r, c: {})
+    assert cmds[0][cmds[0].index("--model") + 1] == "m-review"

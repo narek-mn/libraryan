@@ -70,3 +70,10 @@ def test_mid_run_advice_in_rejection_and_block():
     for text in (precommit.REJECTION, (T / "agents-block.md").read_text()):
         assert advice in text and "git restore --staged <file>" in text and "--no-verify" in text
     assert "this commit" not in precommit.REJECTION  # also shown by the Claude Code guard, before any commit
+
+
+def test_reviewer_input_works_for_both_callers():
+    rev = (T / "agents/libraryan-reviewer.md").read_text()
+    assert "You receive the run reason" in rev and "Libraryan gives you" not in rev
+    assert "**Ledger claims.**" in rev and "=> none" in rev
+    assert "discards your whole run" in (T / "agents/libraryan.md").read_text()

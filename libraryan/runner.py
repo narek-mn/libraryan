@@ -9,13 +9,15 @@ import sys
 import time
 from pathlib import Path
 
-from . import checks, gitutil, ledger, trace
+from . import checks, gitutil, ledger, review, trace
 from .paths import is_protected, is_request
 
 ALLOWED_TOOLS = ("Read,Edit,Write,Glob,Grep,Task,Agent,Bash(git log:*),Bash(git diff:*),Bash(git show:*),"
                  "Bash(git status:*),Bash(git rm:*),Bash(git mv:*),Bash(python3 .libraryan/bin/libraryan check:*)")
 
 STATE = ".libraryan/state"
+SYMLINK_NOTE = ("CLAUDE.md is a symlink to AGENTS.md (or the reverse): leave the link as it is, never replace it "
+                "with a regular file, and no `@AGENTS.md` line is expected")
 _now = time.time
 _sleep = time.sleep
 
@@ -109,8 +111,7 @@ def _bullets(paths: list[str], cap: int = 200) -> str:
 def build_prompt(reason: str, work: dict, cfg: dict) -> str:
     reqs = "\n".join(f"- {r}" for r in work["requests"]) or "- (none)"
     base = _bullets(work.get("baseline", []))
-    keep = ("block in AGENTS.md exactly as it is. CLAUDE.md is a symlink to AGENTS.md (or the reverse): leave the "
-            "link as it is, never replace it with a regular file, and no `@AGENTS.md` line is expected"
+    keep = (f"block in AGENTS.md exactly as it is. {SYMLINK_NOTE}"
             if cfg.get("claude_md_symlink") else
             "block in AGENTS.md and the `@AGENTS.md` line in CLAUDE.md exactly as they are")
     extra = (f"""Installer files (written by setup; you may edit the Markdown ones only — `.libraryan/**` and `.claude/settings.json` are blocked — and keep the `<!-- libraryan:start -->…<!-- libraryan:end -->` {keep}):
@@ -369,6 +370,13 @@ def run(root: Path, cfg: dict, reason: str, extra_paths=()) -> int:
                            and not (root / p).exists()]
                 parsed = ledger.parse(output)
                 problems += ledger.check(root, cfg, deleted, snap, after, parsed)
+                if cfg["independent_review"] and changed and not problems:  # final gate, fails closed
+                    rp, usage = review.run_review(root, cfg, reason, changed, work, parsed["lines"],
+                                                  _call_model, _snapshot)
+                    calls.append({"role": "reviewer", **usage})
+                    if rp:  # also restore anything the reviewer itself touched
+                        problems += rp
+                        diff = sorted({*diff, *_libraryan_changes(after, _snapshot(root, cfg))})
                 if not _on_default(root, cfg):  # another agent switched branch during the run
                     _restore(root, snap, diff, to_head=True)
                     _trace(st, reason, work["head"], "deferred", calls, changed, deleted, problems)

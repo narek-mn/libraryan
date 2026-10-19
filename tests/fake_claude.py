@@ -10,6 +10,17 @@ import time
 from pathlib import Path
 
 modes = os.environ.get("FAKE_CLAUDE_MODE", "").split(",")
+if "--agent" in sys.argv and sys.argv[sys.argv.index("--agent") + 1] == "libraryan-reviewer":
+    Path(".libraryan/state/fake_review_argv").write_text(json.dumps(sys.argv))
+    Path(".libraryan/state/fake_review_prompt").write_text(sys.argv[-1])
+    if "review_edits" in modes:
+        with open("docs/kb/index.md", "a") as f:
+            f.write("- edited by fake reviewer\n")
+    if "review_fail" in modes:
+        sys.exit(1)
+    print(json.dumps({"type": "result", "result": os.environ.get("FAKE_REVIEW", "APPROVE"), "total_cost_usd": 0.01,
+                      "num_turns": 1, "duration_ms": 10, "is_error": False}))
+    sys.exit(0)
 Path(".libraryan/state/fake_claude_ran").write_text("")
 Path(".libraryan/state/fake_claude_prompt").write_text(sys.argv[-1])
 if "argv" in modes:
