@@ -230,6 +230,7 @@ def test_build_prompt_lists_installer_files():
     work = {"requests": [], "since": None, "commits": 0, "health": True, "baseline": [], "extra": ["AGENTS.md"]}
     p = runner.build_prompt("setup", work, {})
     assert "Installer files (written by setup" in p and "- AGENTS.md" in p
+    assert "you may edit the Markdown ones only" in p and "you may edit them," not in p
 
 
 def test_build_prompt_caps_baseline():

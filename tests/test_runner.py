@@ -320,11 +320,48 @@ def test_model_env_strips_claude_session_vars(repo, monkeypatch):
     monkeypatch.setenv("CLAUDECODE", "1")
     monkeypatch.setenv("CLAUDE_CODE_ENTRYPOINT", "cli")
     monkeypatch.setenv("GIT_INDEX_FILE", "/tmp/dead-index")
+    for k in ("CLAUDE_CODE_SSE_PORT", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_CHILD_SESSION"):
+        monkeypatch.setenv(k, "x")
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "tok")
+    monkeypatch.setenv("CLAUDE_CODE_USE_BEDROCK", "1")
     monkeypatch.setenv("FAKE_CLAUDE_MODE", "env")
     assert runner.run(repo, cfg, "manual") == 0
     keys = (state(repo) / "fake_claude_env").read_text().split()
     assert "LIBRARYAN" in keys
-    assert not [k for k in keys if k == "CLAUDECODE" or k.startswith(("CLAUDE_CODE_", "GIT_"))]
+    assert {"CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_USE_BEDROCK"} <= set(keys)  # auth/provider settings survive
+    assert not [k for k in keys if k in ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SSE_PORT")
+                or k.startswith("GIT_") or ("CLAUDE_CODE_" in k and "SESSION" in k)]
+
+
+def test_foreign_edit_only_failure_does_not_back_off(repo, monkeypatch):
+    cfg = make_kb(repo)
+    (repo / "util.py").write_text("y = 1\n")
+    git(repo, "add", "util.py")
+    git(repo, "commit", "-m", "code")
+    commit_request(repo)
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "codeedit")
+    assert runner.run(repo, cfg, "commit") == 1
+    assert not (state(repo) / "last_failed").exists()
+    assert runner.find_work(repo, cfg, "commit")["requests"]  # next trigger retries at the same HEAD
+
+
+def test_foreign_edit_plus_lint_failure_still_backs_off(repo, monkeypatch):
+    cfg = make_kb(repo)
+    (repo / "util.py").write_text("y = 1\n")
+    git(repo, "add", "util.py")
+    git(repo, "commit", "-m", "code")
+    commit_request(repo)
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "codeedit,badnote")
+    assert runner.run(repo, cfg, "commit") == 1
+    assert (state(repo) / "last_failed").exists()
+
+
+def test_other_agents_staged_new_request_stays_staged(repo, monkeypatch):
+    cfg = make_kb(repo)
+    commit_request(repo)
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "stage_request")
+    assert runner.run(repo, cfg, "commit") == 0
+    assert ".libraryan/requests/other-agent.md" in git(repo, "diff", "--cached", "--name-only")
 
 
 def _alive(pid):

@@ -16,7 +16,7 @@ python3 ~/libraryan/libraryan.py init
 ```
 
 `init` refuses to run on a non-default branch or with uncommitted installer paths or owned docs.
-Use `init --no-setup` to install without the first Claude run.
+Use `init --no-setup` to install without the first Claude run; the first commit afterwards then triggers the full setup run (up to `setup_timeout_minutes`).
 
 ## What init changes
 
@@ -89,6 +89,7 @@ Each run writes `.libraryan/state/reports/<timestamp>.md` and `.libraryan/state/
 - `git commit --no-verify` skips the pre-commit hook and bypasses the lock the same way.
 - A non-Claude agent (no guard hook) that edits an owned doc while a run is in progress can have that edit committed as Libraryan's.
 - Cron runs without your shell profile: make sure `claude` works non-interactively from cron (auth stored, not on a PATH that only nvm or your profile sets up).
+- A run fails (and is retried on the next trigger) when another agent edits code while Libraryan runs.
 - Requests from teammates that arrive by `git pull` wait for your next local commit or the 03:00 run.
 - Edits made through Bash are only caught at commit time.
 - Claude Code is the only supported runtime.

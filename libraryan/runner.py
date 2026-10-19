@@ -113,7 +113,7 @@ def build_prompt(reason: str, work: dict, cfg: dict) -> str:
             "link as it is, never replace it with a regular file, and no `@AGENTS.md` line is expected"
             if cfg.get("claude_md_symlink") else
             "block in AGENTS.md and the `@AGENTS.md` line in CLAUDE.md exactly as they are")
-    extra = (f"""Installer files (written by setup; you may edit them, but keep the `<!-- libraryan:start -->…<!-- libraryan:end -->` {keep}):
+    extra = (f"""Installer files (written by setup; you may edit the Markdown ones only — `.libraryan/**` and `.claude/settings.json` are blocked — and keep the `<!-- libraryan:start -->…<!-- libraryan:end -->` {keep}):
 {_bullets(work["extra"])}
 
 """ if work.get("extra") else "")
@@ -193,8 +193,10 @@ def _restore(root: Path, snap: dict, paths: list[str], to_head=False) -> None:
 
 def _child_env() -> dict:
     """Not the calling Claude Code session's (nested-session markers) nor a git hook's (temporary index)."""
-    return {**{k: v for k, v in os.environ.items()
-               if k != "CLAUDECODE" and not k.startswith(("CLAUDE_CODE_", "GIT_"))}, "LIBRARYAN": "1"}
+    # only session markers go; CLAUDE_CODE_OAUTH_TOKEN / CLAUDE_CODE_USE_* (auth, provider) must survive
+    drop = lambda k: (k in ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SSE_PORT")
+                      or k.startswith("GIT_") or (k.startswith("CLAUDE_CODE_") and "SESSION" in k))
+    return {**{k: v for k, v in os.environ.items() if not drop(k)}, "LIBRARYAN": "1"}
 
 
 def _call_model(cmd: list[str], root: Path, timeout: float) -> tuple[str, list[str]]:
@@ -219,8 +221,9 @@ def _call_model(cmd: list[str], root: Path, timeout: float) -> tuple[str, list[s
     return out, [f"{cmd[0]} exited {p.returncode}"] if p.returncode else []
 
 
-def _unstage_new(root: Path, staged_before: set[str]) -> None:
-    new = sorted(_staged(root) - staged_before)
+def _unstage_new(root: Path, staged_before: set[str], snap: dict) -> None:
+    # a request absent from the snapshot is another agent's (the Libraryan agent never stages new ones)
+    new = sorted(p for p in _staged(root) - staged_before if not (is_request(p) and p not in snap))
     if new:
         gitutil.git(root, "reset", "-q", "--", *new, check=False)
 
@@ -304,7 +307,7 @@ def run(root: Path, cfg: dict, reason: str, extra_paths=()) -> int:
                 output, problems = _call_model([*cmd, build_prompt(reason, work, cfg)], root, timeout)
                 # undo all staging done during the run (the agent's git rm/mv, or a stray `git rm` of code) so the
                 # index is as before; Libraryan's changes are then taken from the working tree like any edit
-                _unstage_new(root, staged_before)
+                _unstage_new(root, staged_before, snap)
                 after = _snapshot(root, cfg)
                 diff = _libraryan_changes(snap, after)
                 for p in re.findall(r"^Discard: `?(.+?)`?\s*$", output, re.M):  # rejected new files only
@@ -326,6 +329,7 @@ def run(root: Path, cfg: dict, reason: str, extra_paths=()) -> int:
                 # stray edit. Those paths are reported, never restored (they may be someone's work).
                 foreign = sorted(p for p in set(_baseline(root)) - dirty_before - set(diff)
                                  if not is_request(p) and not p.startswith(STATE + "/"))
+                transient = bool(foreign) and not problems  # only another agent's edit: retry at this HEAD
                 if foreign:
                     problems.append(f"non-owned paths changed: {', '.join(foreign)}")
                 if changed and not problems:
@@ -336,11 +340,12 @@ def run(root: Path, cfg: dict, reason: str, extra_paths=()) -> int:
                 if problems:
                     _restore(root, snap, diff)
                     _report(st, reason, work, changed, problems, output)
-                    (st / "last_failed").write_text(work["head"] + "\n")
+                    if not transient:
+                        (st / "last_failed").write_text(work["head"] + "\n")
                     return 1
             except BaseException as e:  # Ctrl-C, a crash, a failed restore: leave no half-done run behind
                 try:
-                    _unstage_new(root, staged_before)
+                    _unstage_new(root, staged_before, snap)
                     _restore(root, snap, _libraryan_changes(snap, _snapshot(root, cfg)))
                 finally:
                     _report(st, reason, work, [], [f"run aborted: {e!r}"], output)

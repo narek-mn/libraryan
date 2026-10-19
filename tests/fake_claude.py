@@ -23,6 +23,9 @@ if "race_request" in modes:  # consume pending requests, while another agent wri
     for p in Path(".libraryan/requests").glob("*.md"):
         p.unlink()
     Path(".libraryan/requests/other-agent.md").write_text("in progress\n")
+if "stage_request" in modes:  # another agent stages a fresh request during the run
+    Path(".libraryan/requests/other-agent.md").write_text("staged\n")
+    subprocess.run(["git", "add", ".libraryan/requests/other-agent.md"], check=True)
 if "commit" in modes:  # another agent commits code during the run
     Path("src.py").write_text("x = 1\n")
     subprocess.run(["git", "add", "src.py"], check=True)
