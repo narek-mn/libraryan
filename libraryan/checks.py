@@ -17,13 +17,16 @@ SECRETS = [re.compile(p) for p in (
     r"(?<![A-Za-z0-9_-])sk-(ant-)?[A-Za-z0-9_-]{20,}",
     r"(?<![A-Za-z0-9_-])xox[abprs]-[A-Za-z0-9-]{10,}",
     r"(?<![A-Za-z0-9_-])AIza[0-9A-Za-z_-]{35}",
-    r"(?i)(password|secret|api[_-]?key|token)\s*[:=]\s*['\"][^'\"\s]{8,}['\"]",
+    # values that look like placeholders (`<your-token>`, `${API_KEY}`, `changeme`) are documentation, not secrets
+    r"(?i)(password|secret|api[_-]?key|token)\s*[:=]\s*['\"]"
+    r"(?![^'\"\s]*(?:[<${]|your|example|change|placeholder|dummy|xxxx))[^'\"\s]{8,}['\"]",
 )]
 
 
 def _links(root: Path, rel: str, text: str) -> list[tuple[str, str]]:
     """(raw link, repo-relative resolved path) for relative .md links."""
     out = []
+    text = re.sub(r"`[^`\n]*`", "", re.sub(r"```.*?(?:```|\Z)", "", text, flags=re.S))  # code is not links
     for raw in LINK.findall(text):
         target = unquote(raw.split("#")[0])
         if not target or SCHEME.match(raw) or target.startswith("/") or not target.endswith(".md"):
@@ -57,7 +60,9 @@ def lint(root: Path, cfg: dict, files: list[str]) -> list[str]:
 
 
 def scan_text(text: str, label: str) -> list[str]:
-    return [f"{label}: possible secret"] if any(rx.search(text) for rx in SECRETS) else []
+    """`label:line: possible secret (abcd…)`: enough to find it, never the whole value."""
+    return [f"{label}:{text.count(chr(10), 0, m.start()) + 1}: possible secret ({m.group()[:4]}…)"
+            for rx in SECRETS for m in rx.finditer(text)]
 
 
 def scan_secrets(root: Path, files: list[str]) -> list[str]:

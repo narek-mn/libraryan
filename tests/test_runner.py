@@ -380,3 +380,15 @@ def test_interrupt_restores_and_reports(repo, monkeypatch):
     assert git(repo, "status", "--porcelain", "--untracked-files=no") == ""
     assert (repo / "docs/kb/index.md").read_text() == "# Index\n"
     assert "KeyboardInterrupt" in (state(repo) / "reports/latest.md").read_text()
+
+
+def test_cli_check_owned_files_only_non_ascii(repo):
+    cfg = make_kb(repo)
+    config.save(repo, cfg)
+    (repo / "docs/գիտելիք.md").write_text("[x](nope.md)\n")
+    (repo / "fixtures").mkdir()
+    (repo / "fixtures/f.md").write_text("[y](gone.md)\n")  # excluded: not Libraryan's
+    r = subprocess.run([str(repo / ".libraryan/bin/libraryan"), "check"], cwd=repo, capture_output=True,
+                       text=True)
+    assert r.returncode == 1 and "docs/գիտելիք.md: broken link nope.md" in r.stdout
+    assert "fixtures/f.md" not in r.stdout

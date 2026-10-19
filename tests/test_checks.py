@@ -48,7 +48,7 @@ def test_lint_ignores_frontmatter_outside_kb(tmp_path):
 def test_secrets_detects_aws_key(tmp_path):
     mk(tmp_path, "a.txt", "key=AKIAABCDEFGHIJKLMNOP\n")
     out = checks.scan_secrets(tmp_path, ["a.txt"])
-    assert len(out) == 1 and out[0].startswith("a.txt: ")
+    assert len(out) == 1 and out[0].startswith("a.txt:1: ")
 
 
 def test_secrets_clean_file(tmp_path):
@@ -75,3 +75,20 @@ def test_lint_frontmatter_crlf(tmp_path):
 
 def test_lint_frontmatter_at_eof(tmp_path):
     assert _kb_note(tmp_path, FM.rstrip("\n")) == []
+
+
+def test_secrets_ignore_placeholders(tmp_path):
+    mk(tmp_path, "a.md", 'API_KEY="your_api_key_here"\ntoken: "<your-token>"\npassword = "changeme123"\n'
+                         'api_key: "${API_KEY}"\n')
+    assert checks.scan_secrets(tmp_path, ["a.md"]) == []
+
+
+def test_secret_reported_with_line_and_masked(tmp_path):
+    mk(tmp_path, "a.md", "intro\n\npassword = \"Tr0ub4dor&3horse\"\n")
+    out = checks.scan_secrets(tmp_path, ["a.md"])
+    assert len(out) == 1 and out[0].startswith("a.md:3: ") and "Tr0ub4dor&3horse" not in out[0]
+
+
+def test_lint_ignores_links_in_code(tmp_path):
+    mk(tmp_path, "a.md", "```\n[x](nope.md)\n```\nuse `[y](gone.md)` syntax\n[z](missing.md)\n")
+    assert lint(tmp_path, ["a.md"]) == ["a.md: broken link missing.md"]

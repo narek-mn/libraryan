@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 from . import cchooks, checks, config, gitutil, install, precommit, runner
+from .paths import is_protected, is_request
 
 def _precommit() -> int:
     root = gitutil.repo_root(Path.cwd())
@@ -64,8 +65,10 @@ def main(argv: list[str]) -> int:
         return 0
     if cmd == "check":
         root = gitutil.repo_root(Path.cwd())
-        files = gitutil.git(root, "ls-files", "-co", "--exclude-standard").splitlines()
-        problems = checks.run_all(root, config.load(root), files)
+        cfg = config.load(root)
+        files = [p for p in runner._ls_files(root, "-co", "--exclude-standard")
+                 if is_protected(p, cfg) or is_request(p)]
+        problems = checks.run_all(root, cfg, files)
         for p in problems:
             print(p)
         return 1 if problems else 0
