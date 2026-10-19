@@ -3,6 +3,11 @@ from pathlib import Path
 from . import checks, gitutil
 from .paths import glob_match, is_protected, is_request
 
+REJECTION = """Libraryan: this commit touches documentation managed by Libraryan.
+Do not edit these files directly. Write a request file in .libraryan/requests/
+instead (see .claude/skills/libraryan-request/SKILL.md); Libraryan will update the docs.
+Blocked paths / problems:"""
+
 
 def _scan_staged(root: Path, changes) -> list[str]:
     out = []
