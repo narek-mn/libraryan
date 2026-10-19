@@ -37,6 +37,7 @@ Owned files (default: all `**/*.md`, `.claude/skills/**`, `.cursor/rules/**`, `.
 the Claude Code hook blocks Edit/Write, and the pre-commit hook rejects commits touching them (deletions pass).
 To change docs, add a Markdown file under `.libraryan/requests/` (see the `libraryan-request` skill) and commit it.
 After a commit, Libraryan waits `debounce_minutes` for quiet, then runs and commits the doc updates.
+A failed run is retried only after the next commit or by `run` (see `reports/latest.md`); the daily health check is skipped when nothing was committed since the last one.
 
 Docs vs code: if docs contradict the code, Libraryan fixes the docs; suspected code bugs go under "Possible code issues" in the report.
 Outdated or junk Markdown is deleted after still-valid facts are moved into the KB (git history keeps everything).
@@ -68,6 +69,7 @@ Without a project install, `python3 ~/libraryan/libraryan.py {init,upgrade,unins
 | `claude_bin` / `model` | `claude` / `null` | Claude Code binary and model |
 | `debounce_minutes` | `10` | Quiet time after a commit before a run |
 | `run_timeout_minutes` | `30` | Kill a run after this long |
+| `setup_timeout_minutes` | `120` | Same, for the setup run |
 | `language` | `en` | Language of the docs |
 | `owned` / `excluded` | see `config.py` | Globs Libraryan owns / ignores |
 | `exempt` | `[]` | Owned-looking paths people may still edit |
@@ -84,6 +86,10 @@ Each run writes `.libraryan/state/reports/<timestamp>.md` and `.libraryan/state/
 ## Known limits
 
 - `LIBRARYAN=1` in the environment bypasses the lock; any process can set it. The upgrade path is a CI check.
+- `git commit --no-verify` skips the pre-commit hook and bypasses the lock the same way.
+- A non-Claude agent (no guard hook) that edits an owned doc while a run is in progress can have that edit committed as Libraryan's.
+- Cron runs without your shell profile: make sure `claude` works non-interactively from cron (auth stored, not on a PATH that only nvm or your profile sets up).
+- Requests from teammates that arrive by `git pull` wait for your next local commit or the 03:00 run.
 - Edits made through Bash are only caught at commit time.
 - Claude Code is the only supported runtime.
 - Teammates' clones get the lock when Claude Code's SessionStart hook enables the git hooks there, but they do not run Libraryan.

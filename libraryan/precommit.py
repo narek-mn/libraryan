@@ -3,9 +3,11 @@ from pathlib import Path
 from . import checks, gitutil
 from .paths import glob_match, is_protected, is_request
 
-REJECTION = """Libraryan: this commit touches documentation managed by Libraryan.
-Do not edit these files directly. Write a request file in .libraryan/requests/
+REJECTION = """Libraryan: these documentation files are managed by Libraryan.
+Do not edit them directly. Write a request file in .libraryan/requests/
 instead (see .claude/skills/libraryan-request/SKILL.md); Libraryan will update the docs.
+If you did not edit these files, Libraryan may be mid-run: unstage them (`git restore --staged <file>`)
+and commit only your own files. Never discard, stash, or use --no-verify on them.
 Blocked paths / problems:"""
 
 

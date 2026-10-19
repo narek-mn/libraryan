@@ -61,3 +61,11 @@ def test_no_relative_md_links():
 def test_allowed_tools_can_delete_and_move():
     tools = runner.ALLOWED_TOOLS.split(",")
     assert "Bash(git rm:*)" in tools and "Bash(git mv:*)" in tools
+
+
+def test_mid_run_advice_in_rejection_and_block():
+    from libraryan import precommit
+    advice = "If you did not edit these files, Libraryan may be mid-run"
+    for text in (precommit.REJECTION, (T / "agents-block.md").read_text()):
+        assert advice in text and "git restore --staged <file>" in text and "--no-verify" in text
+    assert "this commit" not in precommit.REJECTION  # also shown by the Claude Code guard, before any commit

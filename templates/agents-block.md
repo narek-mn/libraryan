@@ -5,6 +5,7 @@ Libraryan is the only writer of this project's Markdown docs: the knowledge base
 
 - Read the docs freely; start with `index.md` in the knowledge base folder (`kb_root` in the config).
 - Do not edit owned files. The commit will be rejected.
+- Commit rejected for owned files? If you did not edit these files, Libraryan may be mid-run: unstage them (`git restore --staged <file>`) and commit only your own files. Never discard, stash, or use --no-verify on them.
 - To change docs, send a request: write a file in `.libraryan/requests/` as described in `.claude/skills/libraryan-request/SKILL.md`, and commit it with your work.
 
 Send a request when you:
