@@ -38,7 +38,7 @@ the Claude Code hook blocks Edit/Write, and the pre-commit hook rejects commits 
 To change docs, add a Markdown file under `.libraryan/requests/` (see the `libraryan-request` skill) and commit it.
 After a commit, Libraryan waits `debounce_minutes` for quiet, then runs and commits the doc updates.
 A failed run is retried only after the next commit or by `run` (see `reports/latest.md`); the daily health check is skipped when nothing was committed since the last one.
-Before any model call, Libraryan runs `libraryan audit` (below). A daily health check that finds nothing to fix, with no requests and no new commits, ends there at no cost (outcome `audited`).
+Before any model call, Libraryan runs `libraryan audit` (below). A daily health check with no requests and no new commits ends there at no cost (outcome `audited`) when the audit finds nothing, or only findings the last completed model health run was already shown (kept in `state/last_health_findings.json`); a new finding gets a model run. When the agent verifies a `stale` note is still accurate it bumps the note's `updated` date, so the finding stops recurring.
 
 Docs vs code: if docs contradict the code, Libraryan fixes the docs; suspected code bugs go under "Possible code issues" in the report.
 Outdated or junk Markdown is deleted after still-valid facts are moved into the KB (git history keeps everything).
@@ -53,9 +53,11 @@ Fact: <deleted> => none | <reason>
 
 `Moved:` needs a destination owned by Libraryan and at least 50% similar to the original. `Fact:` quotes (15+ characters) are checked against the deleted file in HEAD and the destination. Anything else fails the run and the deletion is restored.
 
-Independent review (`independent_review`, on by default): when a run has changes and its own checks pass, the runner starts a second, read-only `claude -p` run (agent `libraryan-reviewer`, runner-built prompt, no author summary) before committing. This is one extra model call per committing run. It fails closed: only the exact answer `APPROVE` passes; anything else, a timeout, or a reviewer that edits files fails the run.
+Independent review (`independent_review`, on by default): when a run has changes and its own checks pass, the runner starts a second, read-only `claude -p` run (agent `libraryan-reviewer`, runner-built prompt, no author summary) before committing. This is one extra model call per committing run. It fails closed: only the exact answer `APPROVE` passes; anything else, a timeout, or a reviewer that edits files fails the run. A setup run's review gets `max_usd_review_setup` and `setup_timeout_minutes`. If another agent changes non-owned files during a run, the run fails before the reviewer is called.
 
-Daily caps: a non-manual run is skipped (outcome `capped`, noted in `reports/latest.md`) once the UTC day has `max_runs_per_day` model runs or `max_commits_per_day` commits, or the last `max_consecutive_failures` runs failed or aborted. `libraryan run` (reason `manual`) ignores the caps. Each model call also gets `--max-budget-usd` (`max_usd_run`, `max_usd_setup`, `max_usd_review`).
+A model call that reports `is_error: true` in its JSON output (for example, its budget ran out mid-run) counts as failed even when it exits 0: the author's run fails and its work is not marked processed; a reviewer reporting it rejects.
+
+Daily caps: an automatic run is skipped (outcome `capped`) once the UTC day has `max_runs_per_day` model runs or `max_commits_per_day` commits, or the last `max_consecutive_failures` runs failed or aborted. Failures caused only by another agent's concurrent edits (non-owned paths changed, or files changed during the review) are traced with `"transient": true` and neither extend nor reset that streak. A capped run keeps the previous `reports/latest.md` (the report that tripped the cap) and appends the cap line to it. `python3 .libraryan/bin/libraryan run` (reason `manual`) and an explicit setup (`init`, `run --reason setup`) ignore the caps. A run that becomes a setup run because `<kb_root>/index.md` is missing (e.g. the first setup failed) is capped like any automatic run. Each model call also gets `--max-budget-usd` (`max_usd_run`, `max_usd_setup`, `max_usd_review`, `max_usd_review_setup`).
 
 ## Commands
 
@@ -88,12 +90,13 @@ Without a project install, `python3 ~/libraryan/libraryan.py {init,upgrade,unins
 | `run_timeout_minutes` | `30` | Kill a run after this long |
 | `setup_timeout_minutes` | `120` | Same, for the setup run |
 | `max_usd_run` / `max_usd_setup` / `max_usd_review` | `5` / `25` / `2` | Per-call budget passed to `claude --max-budget-usd` (run, setup, reviewer) |
+| `max_usd_review_setup` | `10` | Reviewer budget on a setup run |
 | `max_runs_per_day` | `24` | Daily cap on runs that call the model |
 | `max_commits_per_day` | `12` | Daily cap on Libraryan commits |
-| `max_consecutive_failures` | `3` | Stop automatic runs after this many failed or aborted runs in a row |
+| `max_consecutive_failures` | `3` | Stop automatic runs after this many failed or aborted runs in a row (transient failures excluded) |
 | `independent_review` | `true` | Run the reviewer before every commit |
 | `reviewer_model` | `null` | Model for the reviewer (falls back to `model`) |
-| `review_timeout_minutes` | `15` | Kill a reviewer call after this long |
+| `review_timeout_minutes` | `15` | Kill a reviewer call after this long (setup runs use `setup_timeout_minutes`) |
 | `language` | `en` | Language of the docs |
 | `owned` / `excluded` | see `config.py` | Globs Libraryan owns / ignores |
 | `exempt` | `[]` | Owned-looking paths people may still edit |
