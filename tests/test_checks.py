@@ -54,3 +54,24 @@ def test_secrets_detects_aws_key(tmp_path):
 def test_secrets_clean_file(tmp_path):
     mk(tmp_path, "a.txt", "nothing here\n")
     assert checks.scan_secrets(tmp_path, ["a.txt", "missing.txt"]) == []
+
+
+def test_secrets_ignores_hyphenated_slug(tmp_path):
+    mk(tmp_path, "a.md", "[x](risk-assessment-for-the-project.md) disk-encryption-configuration\n")
+    assert checks.scan_secrets(tmp_path, ["a.md"]) == []
+    mk(tmp_path, "b.txt", "k sk-ant-" + "a" * 30 + "\n")
+    assert len(checks.scan_secrets(tmp_path, ["b.txt"])) == 1
+
+
+def _kb_note(root, text):
+    mk(root, "docs/kb/index.md", "[a](a.md)\n")
+    (root / "docs/kb/a.md").write_bytes(text.encode())
+    return lint(root, ["docs/kb/a.md"])
+
+
+def test_lint_frontmatter_crlf(tmp_path):
+    assert _kb_note(tmp_path, FM.replace("\n", "\r\n")) == []
+
+
+def test_lint_frontmatter_at_eof(tmp_path):
+    assert _kb_note(tmp_path, FM.rstrip("\n")) == []

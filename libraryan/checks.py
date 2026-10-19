@@ -10,13 +10,13 @@ SPECIAL = ("index.md", "log.md", "STYLE.md")
 LINK = re.compile(r"\[[^\]]*\]\(([^)\s]+)\)")
 SCHEME = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
 SECRETS = [re.compile(p) for p in (
-    r"AKIA[0-9A-Z]{16}",
+    r"(?<![A-Za-z0-9_-])AKIA[0-9A-Z]{16}",
     r"-----BEGIN [A-Z ]*PRIVATE KEY-----",
-    r"gh[pousr]_[A-Za-z0-9]{36}",
-    r"github_pat_[A-Za-z0-9_]{20,}",
-    r"sk-(ant-)?[A-Za-z0-9_-]{20,}",
-    r"xox[abprs]-[A-Za-z0-9-]{10,}",
-    r"AIza[0-9A-Za-z_-]{35}",
+    r"(?<![A-Za-z0-9_-])gh[pousr]_[A-Za-z0-9]{36}",
+    r"(?<![A-Za-z0-9_-])github_pat_[A-Za-z0-9_]{20,}",
+    r"(?<![A-Za-z0-9_-])sk-(ant-)?[A-Za-z0-9_-]{20,}",
+    r"(?<![A-Za-z0-9_-])xox[abprs]-[A-Za-z0-9-]{10,}",
+    r"(?<![A-Za-z0-9_-])AIza[0-9A-Za-z_-]{35}",
     r"(?i)(password|secret|api[_-]?key|token)\s*[:=]\s*['\"][^'\"\s]{8,}['\"]",
 )]
 
@@ -41,12 +41,12 @@ def lint(root: Path, cfg: dict, files: list[str]) -> list[str]:
         p = root / rel
         if not rel.endswith(".md") or not p.is_file():
             continue
-        text = p.read_text(errors="replace")
+        text = p.read_text(errors="replace").replace("\r\n", "\n")
         for raw, res in _links(root, rel, text):
             if not (root / res).exists():
                 problems.append(f"{rel}: broken link {raw}")
         if rel.startswith(kb + "/") and posixpath.basename(rel) not in SPECIAL:
-            m = re.match(r"---\n(.*?\n)?---\n", text, re.S)
+            m = re.match(r"---\n(.*?\n)?---(?:\n|$)", text, re.S)
             have = set(re.findall(r"^(\w+):", m.group(1) or "", re.M)) if m else set()
             missing = [k for k in KEYS if k not in have]
             if missing:
