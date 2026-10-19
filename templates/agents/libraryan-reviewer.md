@@ -8,7 +8,7 @@ tools: Read, Glob, Grep, Bash
 
 You review the documentation changes Libraryan made in this run before they are committed. No person reviews them after you. You are read-only: never edit, write, move or delete anything.
 
-Bash is for read-only git only: `git status`, `git diff`, `git show`, `git log`. Run nothing else.
+Bash is for read-only git only: `git status`, `git diff`, `git show`, `git log`. Run nothing else, and never use `--output` or any other option that writes a file.
 
 ## Input
 

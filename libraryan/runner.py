@@ -370,13 +370,12 @@ def run(root: Path, cfg: dict, reason: str, extra_paths=()) -> int:
                            and not (root / p).exists()]
                 parsed = ledger.parse(output)
                 problems += ledger.check(root, cfg, deleted, snap, after, parsed)
-                if cfg["independent_review"] and changed and not problems:  # final gate, fails closed
+                # final gate, fails closed; skipped once the branch moved (the check below then defers)
+                if cfg["independent_review"] and changed and not problems and _on_default(root, cfg):
                     rp, usage = review.run_review(root, cfg, reason, changed, work, parsed["lines"],
                                                   _call_model, _snapshot)
                     calls.append({"role": "reviewer", **usage})
-                    if rp:  # also restore anything the reviewer itself touched
-                        problems += rp
-                        diff = sorted({*diff, *_libraryan_changes(after, _snapshot(root, cfg))})
+                    problems += rp
                 if not _on_default(root, cfg):  # another agent switched branch during the run
                     _restore(root, snap, diff, to_head=True)
                     _trace(st, reason, work["head"], "deferred", calls, changed, deleted, problems)
@@ -385,7 +384,8 @@ def run(root: Path, cfg: dict, reason: str, extra_paths=()) -> int:
                 # stray edit. Those paths are reported, never restored (they may be someone's work).
                 foreign = sorted(p for p in set(_baseline(root)) - dirty_before - set(diff)
                                  if not is_request(p) and not p.startswith(STATE + "/"))
-                transient = bool(foreign) and not problems  # only another agent's edit: retry at this HEAD
+                # only another agent's edit (or one indistinguishable from it): retry at this HEAD
+                transient = all(p.startswith(review.MODIFIED) for p in problems)
                 if foreign:
                     problems.append(f"non-owned paths changed: {', '.join(foreign)}")
                 if changed and not problems:

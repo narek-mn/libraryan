@@ -208,6 +208,7 @@ def test_branch_switch_during_run_defers(repo, monkeypatch):
     assert libraryan_commits(repo) == []
     assert git(repo, "status", "--porcelain") == ""
     assert last_trace(repo)["outcome"] == "deferred"
+    assert not (state(repo) / "fake_review_argv").exists()  # no paid review once the branch moved
 
 
 def test_model_timeout_fails_run(repo, monkeypatch):
@@ -660,7 +661,39 @@ def test_reviewer_edit_rejected(repo, monkeypatch):
     monkeypatch.setenv("FAKE_CLAUDE_MODE", "review_edits")
     assert runner.run(repo, cfg, "manual") == 1
     assert libraryan_commits(repo) == [] and (repo / "docs/kb/index.md").read_text() == "# Index\n"
-    assert "review: reviewer modified files" in (state(repo) / "reports/latest.md").read_text()
+    assert "review: reviewer modified files: docs/kb/index.md" in (state(repo) / "reports/latest.md").read_text()
+    assert not (state(repo) / "last_failed").exists()  # indistinguishable from another agent: transient
+
+
+def test_new_doc_during_review_is_reported_not_removed(repo, monkeypatch):
+    cfg = make_kb(repo)
+    add_request(repo)
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "review_newdoc")
+    assert runner.run(repo, cfg, "manual") == 1
+    assert libraryan_commits(repo) == [] and (repo / "docs/kb/index.md").read_text() == "# Index\n"
+    assert (repo / "docs/other.md").read_text() == "another agent\n"
+    assert "review: reviewer modified files: docs/other.md" in (state(repo) / "reports/latest.md").read_text()
+    assert not (state(repo) / "last_failed").exists()
+
+
+def test_request_written_during_review_survives(repo, monkeypatch):
+    cfg = make_kb(repo)
+    add_request(repo)
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "review_request")
+    assert runner.run(repo, cfg, "manual") == 0
+    assert libraryan_commits(repo) == ["docs(libraryan): manual run"]
+    assert (repo / ".libraryan/requests/other-agent.md").read_text() == "during review\n"
+    assert ".libraryan/requests/other-agent.md" not in head_files(repo)
+
+
+def test_baseline_doc_edited_during_review_kept(repo, monkeypatch):
+    cfg = make_kb(repo)
+    (repo / "docs/wip.md").write_text("wip\n")
+    add_request(repo)
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "review_baseline")
+    assert runner.run(repo, cfg, "manual") == 0
+    assert (repo / "docs/wip.md").read_text() == "wip\nmore wip\n"
+    assert "docs/wip.md" not in head_files(repo)
 
 
 def test_reviewer_failure_rejects(repo, monkeypatch):

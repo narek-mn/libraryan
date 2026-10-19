@@ -16,6 +16,13 @@ if "--agent" in sys.argv and sys.argv[sys.argv.index("--agent") + 1] == "library
     if "review_edits" in modes:
         with open("docs/kb/index.md", "a") as f:
             f.write("- edited by fake reviewer\n")
+    if "review_newdoc" in modes:  # another agent writes a doc during the review
+        Path("docs/other.md").write_text("another agent\n")
+    if "review_request" in modes:
+        Path(".libraryan/requests/other-agent.md").write_text("during review\n")
+    if "review_baseline" in modes:
+        with open("docs/wip.md", "a") as f:
+            f.write("more wip\n")
     if "review_fail" in modes:
         sys.exit(1)
     print(json.dumps({"type": "result", "result": os.environ.get("FAKE_REVIEW", "APPROVE"), "total_cost_usd": 0.01,

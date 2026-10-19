@@ -75,5 +75,5 @@ def test_mid_run_advice_in_rejection_and_block():
 def test_reviewer_input_works_for_both_callers():
     rev = (T / "agents/libraryan-reviewer.md").read_text()
     assert "You receive the run reason" in rev and "Libraryan gives you" not in rev
-    assert "**Ledger claims.**" in rev and "=> none" in rev
+    assert "**Ledger claims.**" in rev and "=> none" in rev and "--output" in rev
     assert "discards your whole run" in (T / "agents/libraryan.md").read_text()
