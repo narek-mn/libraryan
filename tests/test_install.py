@@ -5,9 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from libraryan import config, install, runner
+from libraryan import __version__, config, install, runner
 
-SRC = Path(__file__).resolve().parent.parent
+SRC = Path(install.__file__).resolve().parent  # the package dir: package data lives in it
 FAKE = Path(__file__).resolve().parent / "fake_claude.py"
 START, END = "<!-- libraryan:start -->", "<!-- libraryan:end -->"
 
@@ -43,8 +43,10 @@ def test_init_installs_and_commits(repo, fake_crontab):
     agents = (repo / "AGENTS.md").read_text()
     assert START in agents and END in agents
     assert "@AGENTS.md" in (repo / "CLAUDE.md").read_text().splitlines()
+    assert not (repo / ".libraryan/libraryan/_runtime").exists()
+    assert not (repo / ".libraryan/libraryan/_templates").exists()
     cfg = config.load(repo)
-    assert cfg["source_path"] == str(SRC) and cfg["default_branch"] == "main" and cfg["runner_host"]
+    assert "source_path" not in cfg and cfg["default_branch"] == "main" and cfg["runner_host"]
     assert f"# libraryan:{repo}" in fake_crontab.read_text()
 
 
@@ -176,7 +178,7 @@ def test_upgrade_keeps_existing_block_and_adds_new_defaults(repo, monkeypatch):
     assert install.upgrade(repo, SRC) == 0
     assert subject(repo) == "docs(libraryan): upgrade"
     assert (repo / "AGENTS.md").read_text() == agents
-    assert (repo / ".libraryan/libraryan/cli.py").read_text() == (SRC / "libraryan/cli.py").read_text()
+    assert (repo / ".libraryan/libraryan/cli.py").read_text() == (SRC / "cli.py").read_text()
     assert not (repo / ".libraryan/libraryan/gone.py").exists()
     cfg = config.load(repo)
     assert cfg["kb_root"] == "kb"
@@ -257,21 +259,39 @@ def test_runner_never_commits_baseline_paths(repo, monkeypatch):
     assert "other agent wip" in (repo / "docs/kb/index.md").read_text()
 
 
-def test_source_cli_usage(repo):
-    r = subprocess.run(["python3", str(SRC / "libraryan.py"), "--help"], cwd=repo, capture_output=True, text=True)
-    assert r.returncode == 0 and "init" in r.stdout and "uninstall" in r.stdout
+def test_cli_version(capsys):
+    from libraryan import cli
+    assert cli.main(["--version"]) == 0 and cli.main(["version"]) == 0
+    assert capsys.readouterr().out == f"libraryan {__version__}\n" * 2
 
 
-def test_source_cli_init_no_setup(repo, monkeypatch):
-    import importlib.util
-    spec = importlib.util.spec_from_file_location("libraryan_main", SRC / "libraryan.py")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+def test_cli_usage_lists_user_commands(capsys):
+    from libraryan import cli
+    assert cli.main([]) == 2
+    err = capsys.readouterr().err
+    for c in ("init", "upgrade", "uninstall", "run", "check", "audit", "stats", "--version"):
+        assert c in err, c
+
+
+def test_cli_init_no_setup(repo, monkeypatch):
+    from libraryan import cli
     monkeypatch.chdir(repo)
-    assert mod.main(["init", "--no-setup"]) == 0
+    assert cli.main(["init", "--no-setup"]) == 0
     assert subject(repo) == "docs(libraryan): install"
-    assert mod.main(["uninstall"]) == 0
+    assert cli.main(["upgrade"]) == 0  # nothing changed: no commit
+    assert subject(repo) == "docs(libraryan): install"
+    assert cli.main(["uninstall"]) == 0
     assert subject(repo) == "docs(libraryan): uninstall"
+
+
+def only_path(tmp, *tools):
+    """A PATH with just these tools, so a real global `libraryan` can never be found."""
+    import shutil
+    d = tmp / "pathbin"
+    d.mkdir(exist_ok=True)
+    for t in tools:
+        (d / t).symlink_to(shutil.which(t))
+    return {**os.environ, "PATH": str(d)}
 
 
 def test_vendored_cli_uninstall(repo):
@@ -286,15 +306,33 @@ def test_vendored_cli_uninstall(repo):
     assert not (repo / ".libraryan").exists()
 
 
-def test_vendored_cli_upgrade_uses_source(repo):
+def test_vendored_cli_upgrade_runs_global_command(repo, tmp_path_factory):
     install.init(repo, SRC, run_setup=False)
     (repo / ".libraryan/libraryan/gone.py").write_text("# removed upstream\n")
     git(repo, "add", "-A")
     git(repo, "commit", "-qm", "stale", env={"LIBRARYAN": "1"})
-    r = subprocess.run(["python3", ".libraryan/bin/libraryan", "upgrade"], cwd=repo, capture_output=True, text=True)
+    tmp = tmp_path_factory.mktemp("global")
+    env = only_path(tmp, "git", "python3")
+    (tmp / "pathbin/libraryan").write_text(  # stands in for the pipx-installed command
+        f"#!/bin/sh\nexec python3 -c 'import sys; sys.path.insert(0, \"{SRC.parent}\"); "
+        "from libraryan.cli import entry; entry()' \"$@\"\n")
+    (tmp / "pathbin/libraryan").chmod(0o755)
+    r = subprocess.run(["python3", ".libraryan/bin/libraryan", "upgrade"], cwd=repo, capture_output=True,
+                       text=True, env=env)
     assert r.returncode == 0, r.stderr
     assert subject(repo) == "docs(libraryan): upgrade"
     assert not (repo / ".libraryan/libraryan/gone.py").exists()
+
+
+def test_vendored_cli_upgrade_without_global_command(repo, tmp_path_factory):
+    install.init(repo, SRC, run_setup=False)
+    head = git(repo, "rev-parse", "HEAD").stdout
+    env = only_path(tmp_path_factory.mktemp("noglobal"), "git", "python3")
+    r = subprocess.run(["python3", ".libraryan/bin/libraryan", "upgrade"], cwd=repo, capture_output=True,
+                       text=True, env=env)
+    assert r.returncode == 1
+    assert "libraryan: install the tool first: pipx install libraryan" in r.stderr
+    assert git(repo, "rev-parse", "HEAD").stdout == head
 
 
 def test_init_refuses_dirty_settings(repo):

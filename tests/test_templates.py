@@ -3,7 +3,7 @@ from pathlib import Path
 
 from libraryan import checks, runner
 
-T = Path(__file__).resolve().parent.parent / "templates"
+T = Path(__file__).resolve().parent.parent / "libraryan" / "_templates"
 FILES = ["agents/libraryan.md", "agents/libraryan-reviewer.md", "skills/libraryan-request/SKILL.md",
          "agents-block.md", "STYLE.md"]
 

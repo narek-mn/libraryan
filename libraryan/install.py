@@ -5,7 +5,6 @@ import os
 import re
 import shutil
 import socket
-import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -13,6 +12,7 @@ from pathlib import Path
 from . import config, gitutil, precommit, runner
 from .paths import is_protected
 
+PKG = Path(__file__).resolve().parent  # the package, with its data in _runtime/ and _templates/
 crontab_cmd = "crontab"  # tests patch this to a fake; tests never touch the real user crontab
 MARK = ".libraryan/bin/libraryan"
 HOOKS_PATH = ".libraryan/hooks"
@@ -70,20 +70,21 @@ def _crontab(project: Path, line: str | None) -> None:
 
 
 def _copy(project: Path, source: Path) -> None:
-    """Vendored package, runtime and templates: everything upgrade refreshes."""
+    """Vendored package, runtime and templates: everything upgrade refreshes. `source` is the package dir."""
     lib = project / ".libraryan"
-    for name, src in (("libraryan", "libraryan"), ("bin", "runtime/bin"), ("hooks", "runtime/hooks")):
+    for name, src in (("libraryan", ""), ("bin", "_runtime/bin"), ("hooks", "_runtime/hooks")):
         shutil.rmtree(lib / name, ignore_errors=True)
-        shutil.copytree(source / src, lib / name, ignore=shutil.ignore_patterns("__pycache__"))
+        shutil.copytree(source / src, lib / name,
+                        ignore=shutil.ignore_patterns("__pycache__", "_runtime", "_templates"))
     for f in [*(lib / "bin").iterdir(), *(lib / "hooks").iterdir()]:
-        f.chmod(f.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+        f.chmod(0o755)  # explicit: a wheel install may not keep the executable bit
     for src, dest in (("agents/libraryan.md", ".claude/agents/libraryan.md"),
                       ("agents/libraryan-reviewer.md", ".claude/agents/libraryan-reviewer.md"),
                       ("skills/libraryan-request/SKILL.md", ".claude/skills/libraryan-request/SKILL.md"),
                       ("STYLE.md", ".libraryan/templates/STYLE.md"),
                       ("agents-block.md", ".libraryan/templates/agents-block.md")):  # reviewer's reference
         (project / dest).parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(source / "templates" / src, project / dest)
+        shutil.copyfile(source / "_templates" / src, project / dest)
     (lib / "requests").mkdir(exist_ok=True)
     (lib / "requests/.gitkeep").touch()
     (lib / ".gitignore").write_text("state/\n__pycache__/\n")
@@ -152,7 +153,7 @@ def _default_branch(project: Path) -> str:
     return ref.split("/", 1)[1] if ref else gitutil.current_branch(project)
 
 
-def init(project: Path, source: Path, run_setup: bool = True) -> int:
+def init(project: Path, source: Path = PKG, run_setup: bool = True) -> int:
     project, source = Path(project), Path(source)
     branch = _default_branch(project)
     if not runner._on_default(project, {"default_branch": branch}):
@@ -184,12 +185,12 @@ def init(project: Path, source: Path, run_setup: bool = True) -> int:
     if not settings.exists():
         cfg["created_settings"] = True
     cfg.update(default_branch=branch, runner_host=socket.gethostname(), claude_bin=claude or "claude",
-               source_path=str(source), claude_md_symlink=linked)
+               claude_md_symlink=linked)
     config.save(project, cfg)
     settings.write_text(json.dumps(merge_settings(old), indent=2) + "\n")
     text = agents.read_text() if agents.exists() else ""
     if START not in text or END not in text:
-        block = (source / "templates/agents-block.md").read_text().strip() + "\n"
+        block = (source / "_templates/agents-block.md").read_text().strip() + "\n"
         agents.write_text(text.rstrip("\n") + "\n\n" + block if text.strip() else block)
     text = claude_md.read_text() if claude_md.exists() else ""
     if not linked and "@AGENTS.md" not in text.splitlines():  # through a link AGENTS.md would import itself
@@ -213,7 +214,7 @@ def init(project: Path, source: Path, run_setup: bool = True) -> int:
     return code
 
 
-def upgrade(project: Path, source: Path) -> int:
+def upgrade(project: Path, source: Path = PKG) -> int:
     project = Path(project)
     cfg = config.load(project)
     if _dirty(project, cfg):

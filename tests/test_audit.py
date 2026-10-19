@@ -110,7 +110,7 @@ def test_fresh_install_is_clean(repo):
     from pathlib import Path
 
     from libraryan import install
-    assert install.init(repo, Path(__file__).resolve().parent.parent, run_setup=False) == 0
+    assert install.init(repo, run_setup=False) == 0
     (repo / "docs/kb").mkdir(parents=True)
     (repo / "docs/kb/index.md").write_text("# Index\n")
     (repo / "docs/kb/STYLE.md").write_text((repo / ".libraryan/templates/STYLE.md").read_text())  # setup copies it

@@ -9,10 +9,18 @@ Linux or macOS. Python 3.10+, git >= 2.34, Claude Code >= 2.1, cron. [gitleaks](
 
 ## Install
 
+Install the tool once with [pipx](https://pipx.pypa.io) (on Debian/Ubuntu: `sudo apt install pipx && pipx ensurepath`):
+
 ```
-git clone <repo> ~/libraryan
+pipx install libraryan                                     # once published on PyPI
+pipx install git+https://github.com/narek-mn/libraryan     # until then; or `pipx install .` from a clone
+```
+
+Then, in each project:
+
+```
 cd <your-project>        # a git repo, on its default branch, Claude Code installed
-python3 ~/libraryan/libraryan.py init
+libraryan init
 ```
 
 `init` refuses to run on a non-default branch or with uncommitted installer paths or owned docs.
@@ -61,7 +69,7 @@ Daily caps: an automatic run is skipped (outcome `capped`) once the UTC day has 
 
 ## Commands
 
-Run via the vendored `python3 .libraryan/bin/libraryan <cmd>` inside the project:
+Run `libraryan <cmd>` inside the project, or the vendored `python3 .libraryan/bin/libraryan <cmd>` (same commands, no global install needed):
 
 | Command | Does |
 |---|---|
@@ -70,11 +78,21 @@ Run via the vendored `python3 .libraryan/bin/libraryan <cmd>` inside the project
 | `audit` | Deterministic docs-vs-code audit, no model call, always exit 0 (see below) |
 | `stats [--days N]` | Per-day runs, model calls, commits, failures and cost from the run trace (default 7 days) |
 | `check` | Lint docs and scan for secrets; exit 1 on problems |
-| `upgrade` | Re-run the installer from `source_path` (refreshes runtime, hooks, agents, skill) and commit |
+| `init [--no-setup]` | Install into this repo (global command only) |
+| `upgrade` | Refresh the project's vendored copy, hooks, agents and skill from the installed version, and commit (the vendored bin runs the global `libraryan upgrade`) |
 | `uninstall` | Remove hooks, cron, agent files, `.libraryan/` and the AGENTS.md block; commit. The KB stays |
 
 Internal (called by hooks/cron): `precommit`, `postcommit`, `guard`, `ensure-hooks`, `chainpath`.
-Without a project install, `python3 ~/libraryan/libraryan.py {init,upgrade,uninstall}` does the same from the source checkout.
+`libraryan --version` prints the installed version.
+
+## Upgrade
+
+```
+pipx upgrade libraryan
+libraryan upgrade        # in each project; commits the refreshed vendored copy
+```
+
+The project's git hooks, Claude Code hooks and cron job use the vendored copy in `.libraryan/`, so teammates do not need the tool installed unless they run commands themselves.
 
 ## Configuration
 
@@ -115,7 +133,7 @@ Every run, including skipped ones, also appends a line to `.libraryan/state/runs
 
 ## Uninstall
 
-`python3 .libraryan/bin/libraryan uninstall` (or `libraryan.py uninstall`). Restores `core.hooksPath`, removes the cron line and commits the removal.
+`libraryan uninstall` (or `python3 .libraryan/bin/libraryan uninstall`). Restores `core.hooksPath`, removes the cron line and commits the removal.
 
 ## Known limits
 
