@@ -44,12 +44,13 @@ def parse_verdict(text: str) -> tuple[bool, list[str]]:
 def run_review(root, cfg, reason, changed, work, ledger_lines, call_model, snapshot) -> tuple[list[str], dict]:
     """(problems, usage) of one reviewer call; any failure, edit or non-APPROVE answer is a problem."""
     cmd = [cfg["claude_bin"], "-p", "--agent", "libraryan-reviewer", "--permission-mode", "default",
-           "--allowedTools", REVIEW_TOOLS, "--max-budget-usd", str(cfg["max_usd_review"])]
+           "--allowedTools", REVIEW_TOOLS,
+           "--max-budget-usd", str(cfg["max_usd_review_setup" if reason == "setup" else "max_usd_review"])]
     if cfg.get("reviewer_model") or cfg.get("model"):
         cmd += ["--model", cfg.get("reviewer_model") or cfg["model"]]
     before = snapshot(root, cfg)
     text, problems, usage = call_model([*cmd, build_prompt(reason, changed, work, ledger_lines, cfg)], root,
-                                       cfg["review_timeout_minutes"] * 60)
+                                       cfg["setup_timeout_minutes" if reason == "setup" else "review_timeout_minutes"] * 60)
     from .runner import _libraryan_changes
     # ponytail: can't tell the reviewer from another agent editing meanwhile; the runner reports these paths
     # and treats it as transient, never restores them (baseline and new requests are excluded outright)

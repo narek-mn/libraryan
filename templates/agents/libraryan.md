@@ -114,7 +114,7 @@ Start from the audit findings in the prompt (re-run `python3 .libraryan/bin/libr
 
 Safe fixes, always automatic: broken links, missing or malformed frontmatter, notes missing from the index, formatting and other `STYLE.md` violations, log format. These do not apply to agent instruction files outside setup; flag their problems instead.
 
-Judgement calls (contradictions between notes, stale notes, notes without sources): fix only when the code or a cited source settles it, and cite that source. Otherwise flag it and leave the text alone.
+Judgement calls (contradictions between notes, stale notes, notes without sources): fix only when the code or a cited source settles it, and cite that source. Otherwise flag it and leave the text alone. When you verify a `stale` note and find it still accurate, bump its `updated` to today so the finding does not recur.
 
 Log entry per fixed note: op `fix`. Then run Docs vs code and Deleting outdated and junk docs below, as on setup.
 

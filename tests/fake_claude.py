@@ -26,10 +26,12 @@ if "--agent" in sys.argv and sys.argv[sys.argv.index("--agent") + 1] == "library
     if "review_fail" in modes:
         sys.exit(1)
     print(json.dumps({"type": "result", "result": os.environ.get("FAKE_REVIEW", "APPROVE"), "total_cost_usd": 0.01,
-                      "num_turns": 1, "duration_ms": 10, "is_error": False}))
+                      "num_turns": 1, "duration_ms": 10, "is_error": "review_is_error" in modes}))
     sys.exit(0)
 Path(".libraryan/state/fake_claude_ran").write_text("")
 Path(".libraryan/state/fake_claude_prompt").write_text(sys.argv[-1])
+if "exit1" in modes:  # the model fails before touching anything
+    sys.exit(1)
 if "argv" in modes:
     Path(".libraryan/state/fake_claude_argv").write_text(json.dumps(sys.argv))
 with open("docs/kb/index.md", "a") as f:
@@ -89,6 +91,6 @@ extra = os.environ.get("FAKE_CLAUDE_EXTRA", "")
 text = "SUMMARY ok\n" + (extra + "\n" if extra else "") + "".join(f"Discard: {p}\n" for p in discard)
 if "--output-format" in sys.argv and "nojson" not in modes:
     print(json.dumps({"type": "result", "result": text, "total_cost_usd": 0.01, "num_turns": 3,
-                      "duration_ms": 100, "is_error": False}))
+                      "duration_ms": 100, "is_error": "is_error" in modes}))
 else:
     print(text, end="")

@@ -1,4 +1,5 @@
 import fcntl
+import json
 import os
 import posixpath
 import re
@@ -18,6 +19,7 @@ ALLOWED_TOOLS = ("Read,Edit,Write,Glob,Grep,Task,Agent,Bash(git log:*),Bash(git 
 
 STATE = ".libraryan/state"
 FOREIGN = "non-owned paths changed"
+CAP_LINE = "Daily cap reached: {}; run `python3 .libraryan/bin/libraryan run` to override."
 SYMLINK_NOTE = ("CLAUDE.md is a symlink to AGENTS.md (or the reverse): leave the link as it is, never replace it "
                 "with a regular file, and no `@AGENTS.md` line is expected")
 _now = time.time
@@ -226,7 +228,10 @@ def _call_model(cmd: list[str], root: Path, timeout: float) -> tuple[str, list[s
             return "", [f"{cmd[0]} timed out after {timeout / 60:g} min"], {}
         raise
     text, usage = trace.parse_output(out)
-    return text, [f"{cmd[0]} exited {p.returncode}"] if p.returncode else [], usage
+    problems = [f"{cmd[0]} exited {p.returncode}"] if p.returncode else []
+    if usage.get("is_error"):  # e.g. budget exhausted mid-run: the work is not done, whatever the exit code
+        problems.append(f"{cmd[0]} reported is_error")
+    return text, problems, usage
 
 
 def _unstage_new(root: Path, staged_before: set[str], snap: dict) -> None:
@@ -256,7 +261,7 @@ def _commit(root: Path, paths: list[str], reason: str, output: str) -> str | Non
 
 
 def _report(st: Path, reason: str, work: dict, changed: list[str], problems: list[str], output: str,
-            calls: list[dict] = (), ledger_lines: list[str] = ()) -> None:
+            calls: list[dict] = (), ledger_lines: list[str] = (), latest: bool = True) -> None:
     lines = [f"# Libraryan run: {reason}", "",
              f"- Requests: {', '.join(work['requests']) or 'none'}",
              f"- Commits since {work['since'] or '(none)'}: {work['commits']}",
@@ -270,7 +275,8 @@ def _report(st: Path, reason: str, work: dict, changed: list[str], problems: lis
     lines += ["## Deletion ledger", "", *(ledger_lines or ["none"]), "", "## Model output", "", output.strip(), ""]
     text = "\n".join(lines)
     (st / "reports" / time.strftime("%Y%m%dT%H%M%SZ.md", time.gmtime(_now()))).write_text(text)
-    (st / "reports/latest.md").write_text(text)
+    if latest:
+        (st / "reports/latest.md").write_text(text)
 
 
 def _on_default(root: Path, cfg: dict) -> bool:
@@ -289,8 +295,8 @@ def cap_hit(st: Path, cfg: dict) -> str | None:
         return "max_commits_per_day"
     fails = 0
     for r in reversed(trace.read(st)):  # trailing, across days
-        if r.get("outcome") in ("noop", "deferred", "capped", "audited"):
-            continue
+        if r.get("outcome") in ("noop", "deferred", "capped", "audited") or r.get("transient"):
+            continue  # another agent's concurrent edit is not Libraryan failing
         if r.get("outcome") not in ("failed", "aborted"):
             break
         fails += 1
@@ -298,11 +304,19 @@ def cap_hit(st: Path, cfg: dict) -> str | None:
 
 
 def _trace(st: Path, reason: str, head: str, outcome: str, calls=(), changed=(), deleted=(),
-           problems=(), commit=None, cap=None, findings=()) -> None:
+           problems=(), commit=None, cap=None, findings=(), transient=False) -> None:
     """The one trace record of a run() loop iteration."""
     trace.append(st, {"reason": reason, "head": head, "outcome": outcome, "calls": list(calls),
-                      "changed": len(changed), "deleted": len(deleted),
-                      "problems": len(problems), "commit": commit, "cap": cap, "audit_findings": len(findings)})
+                      "changed": len(changed), "deleted": len(deleted), "problems": len(problems), "commit": commit,
+                      "cap": cap, "audit_findings": len(findings), **({"transient": True} if transient else {})})
+
+
+def _known_findings(st: Path) -> set:
+    """Findings the last completed model health run was shown (verified, then fixed or flagged)."""
+    try:
+        return set(map(tuple, json.loads((st / "last_health_findings.json").read_text())))
+    except (OSError, ValueError, TypeError):
+        return set()
 
 
 def _head_or_none(root: Path) -> str | None:
@@ -324,9 +338,10 @@ def run(root: Path, cfg: dict, reason: str, extra_paths=()) -> int:
             if not _on_default(root, cfg):
                 _trace(st, reason, _head_or_none(root), "deferred")
                 return 0
-            if (reason != "setup" and not (root / cfg["kb_root"].strip("/") / "index.md").exists()
-                    and not _backed_off(st, reason, gitutil.head(root))):
-                reason = "setup"  # no knowledge base yet (e.g. the setup run failed or was interrupted)
+            promoted = (reason != "setup" and not (root / cfg["kb_root"].strip("/") / "index.md").exists()
+                        and not _backed_off(st, reason, gitutil.head(root)))
+            if promoted:  # no knowledge base yet (e.g. the setup run failed or was interrupted)
+                reason = "setup"
             work = find_work(root, cfg, reason)
             if not (work["requests"] or work["commits"] or work["health"] or reason == "setup"):
                 _trace(st, reason, work["head"], "noop")
@@ -335,18 +350,25 @@ def run(root: Path, cfg: dict, reason: str, extra_paths=()) -> int:
                 work["audit"] = audit.run(root, cfg)
             except Exception as e:  # a broken audit must neither stop runs nor let one skip the model
                 work["audit"] = [("error", "audit", repr(e))]
-            # a clean health check with nothing else to do is free: no model call, so never capped
+            fnd = work["audit"]
+            # a health check with nothing else to do and no finding the model has not already seen is free:
+            # no model call, so never capped
             if (work["health"] and not work["requests"] and not work["commits"] and reason not in ("manual", "setup")
-                    and work["since"] and not work["audit"]):  # no since: one model run records last_processed
+                    and work["since"]  # no since: one model run records last_processed
+                    and set(fnd) <= _known_findings(st)):
                 (st / "last_health").write_text(str(_now()))
                 (st / "last_health_head").write_text(work["head"] + "\n")
-                _trace(st, reason, work["head"], "audited")
+                _trace(st, reason, work["head"], "audited", findings=fnd)
                 return 0
-            fnd = work["audit"]
-            # --- daily cap check (manual and setup runs ignore it) ---
-            cap = None if reason in ("manual", "setup") else cap_hit(st, cfg)
+            # --- daily cap check (manual and explicit setup runs ignore it; a promoted setup does not) ---
+            cap = None if reason == "manual" or (reason == "setup" and not promoted) else cap_hit(st, cfg)
             if cap:
-                _report(st, reason, work, [], [], f"Daily cap reached: {cap}; run `libraryan run` to override.")
+                line = CAP_LINE.format(cap)
+                _report(st, reason, work, [], [], line, latest=False)
+                # keep the report that tripped the cap readable in latest.md; note the cap once
+                old = _read(st / "reports/latest.md") or ""
+                if line not in old:
+                    (st / "reports/latest.md").write_text(f"{old}\n\n{line}\n" if old else line + "\n")
                 _trace(st, reason, work["head"], "capped", cap=cap, findings=fnd)
                 return 0
             snap = _snapshot(root, cfg)
@@ -387,6 +409,13 @@ def run(root: Path, cfg: dict, reason: str, extra_paths=()) -> int:
                            and not (root / p).exists()]
                 parsed = ledger.parse(output)
                 problems += ledger.check(root, cfg, deleted, snap, after, parsed)
+                # ponytail: also trips on another agent's concurrent code edits; a false failure beats a silent
+                # stray edit. Those paths are reported, never restored (they may be someone's work).
+                foreign_now = lambda: sorted(p for p in set(_baseline(root)) - dirty_before - set(diff)
+                                             if not is_request(p) and not p.startswith(STATE + "/"))
+                foreign = foreign_now()
+                if foreign:  # checked before the review too: never pay a reviewer for a run that will fail
+                    problems.append(f"{FOREIGN}: {', '.join(foreign)}")
                 # final gate, fails closed; skipped once the branch moved (the check below then defers)
                 if cfg["independent_review"] and changed and not problems and _on_default(root, cfg):
                     rp, usage = review.run_review(root, cfg, reason, changed, work, parsed["lines"],
@@ -397,12 +426,8 @@ def run(root: Path, cfg: dict, reason: str, extra_paths=()) -> int:
                     _restore(root, snap, diff, to_head=True)
                     _trace(st, reason, work["head"], "deferred", calls, changed, deleted, problems, findings=fnd)
                     return 0
-                # ponytail: also trips on another agent's concurrent code edits; a false failure beats a silent
-                # stray edit. Those paths are reported, never restored (they may be someone's work).
-                foreign = sorted(p for p in set(_baseline(root)) - dirty_before - set(diff)
-                                 if not is_request(p) and not p.startswith(STATE + "/"))
-                if foreign:
-                    problems.append(f"{FOREIGN}: {', '.join(foreign)}")
+                if late := [p for p in foreign_now() if p not in foreign]:  # appeared during the review
+                    problems.append(f"{FOREIGN}: {', '.join(late)}")
                 if changed and not problems:
                     err = _commit(root, changed, reason, output)
                     if err:
@@ -415,7 +440,8 @@ def run(root: Path, cfg: dict, reason: str, extra_paths=()) -> int:
                     _report(st, reason, work, changed, problems, output, calls, parsed["lines"])
                     if not transient:
                         (st / "last_failed").write_text(work["head"] + "\n")
-                    _trace(st, reason, work["head"], "failed", calls, changed, deleted, problems, findings=fnd)
+                    _trace(st, reason, work["head"], "failed", calls, changed, deleted, problems, findings=fnd,
+                           transient=transient)
                     return 1
             except BaseException as e:  # Ctrl-C, a crash, a failed restore: leave no half-done run behind
                 try:
@@ -432,6 +458,7 @@ def run(root: Path, cfg: dict, reason: str, extra_paths=()) -> int:
             (st / "last_processed").write_text(work["head"] + "\n")  # commits made during the run stay new work
             (st / "last_failed").unlink(missing_ok=True)
             if work["health"]:
+                (st / "last_health_findings.json").write_text(json.dumps(fnd))
                 (st / "last_health").write_text(str(_now()))
                 (st / "last_health_head").write_text(gitutil.head(root) + "\n")  # after its own commit
             if not (st / "rerun").exists():

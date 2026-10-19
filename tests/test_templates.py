@@ -77,3 +77,12 @@ def test_reviewer_input_works_for_both_callers():
     assert "You receive the run reason" in rev and "Libraryan gives you" not in rev
     assert "**Ledger claims.**" in rev and "=> none" in rev and "--output" in rev
     assert "discards your whole run" in (T / "agents/libraryan.md").read_text()
+
+
+def test_stale_note_verified_gets_updated_bumped():
+    assert "still accurate, bump its `updated`" in (T / "agents/libraryan.md").read_text()
+
+
+def test_reviewer_deletion_reason_from_runner():
+    rev = (T / "agents/libraryan-reviewer.md").read_text()
+    assert "From the runner, the reason is in the `log.md` delete entry" in rev

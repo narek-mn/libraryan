@@ -609,7 +609,7 @@ def test_cap_writes_report_line(repo):
     give_finding(repo)  # an untracked request is no work; a finding makes the health run a model run
     prewrite(repo, 3, outcome="aborted", calls=[])
     runner.run(repo, cfg, "commit")
-    line = "Daily cap reached: max_consecutive_failures; run `libraryan run` to override."
+    line = "Daily cap reached: max_consecutive_failures; run `python3 .libraryan/bin/libraryan run` to override."
     assert line in (state(repo) / "reports/latest.md").read_text()
 
 
@@ -798,3 +798,141 @@ def test_missing_last_processed_still_calls_model(repo):
     assert runner.run(repo, cfg, "daily") == 0
     assert (state(repo) / "fake_claude_ran").exists()
     assert (state(repo) / "last_processed").read_text().strip() == head
+
+
+def test_promoted_setup_is_capped(repo, monkeypatch):
+    cfg = make_kb(repo)
+    cfg.update(max_runs_per_day=1, max_consecutive_failures=1)
+    git(repo, "rm", "-q", "docs/kb/index.md")
+    git(repo, "commit", "-m", "rm index", env={"LIBRARYAN": "1"})
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "exit1")
+    for i in range(5):
+        (repo / f"c{i}.py").write_text("x\n")
+        git(repo, "add", f"c{i}.py")
+        git(repo, "commit", "-m", f"c{i}")
+        runner.run(repo, cfg, "commit")
+    recs = [json.loads(l) for l in (state(repo) / "runs.jsonl").read_text().splitlines()]
+    assert [r["outcome"] for r in recs] == ["failed"] + ["capped"] * 4
+    assert sum(bool(r["calls"]) for r in recs) == 1
+    runner.run(repo, cfg, "setup")  # an explicit setup ignores the caps
+    assert last_trace(repo)["outcome"] == "failed" and last_trace(repo)["calls"]
+
+
+def test_setup_review_budget_and_timeout(repo, monkeypatch):
+    from libraryan import review
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "argv")
+    cfg = make_kb(repo)
+    assert config.DEFAULTS["max_usd_review_setup"] == 10
+    git(repo, "rm", "-q", "docs/kb/index.md")
+    git(repo, "commit", "-m", "rm index", env={"LIBRARYAN": "1"})
+    (repo / "docs/kb").mkdir(parents=True)
+    runner.run(repo, cfg, "commit")  # promoted to setup
+    a = json.loads((state(repo) / "fake_review_argv").read_text())
+    assert a[a.index("--max-budget-usd") + 1] == "10"
+    seen = []
+    call = lambda cmd, root, timeout: seen.append(timeout) or ("APPROVE", [], {})
+    for reason in ("setup", "commit"):
+        review.run_review(repo, cfg, reason, ["a.md"], {"baseline": []}, [], call, lambda r, c: {})
+    assert seen == [cfg["setup_timeout_minutes"] * 60, cfg["review_timeout_minutes"] * 60]
+
+
+def test_is_error_fails_run(repo, monkeypatch):
+    cfg = make_kb(repo)
+    commit_request(repo)
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "is_error")
+    assert runner.run(repo, cfg, "commit") == 1
+    assert last_trace(repo)["outcome"] == "failed" and libraryan_commits(repo) == []
+    assert not (state(repo) / "last_processed").exists() and not (state(repo) / "last_health").exists()
+    assert "is_error" in (state(repo) / "reports/latest.md").read_text()
+
+
+def test_reviewer_is_error_rejects(repo, monkeypatch):
+    cfg = make_kb(repo)
+    add_request(repo)
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "review_is_error")
+    assert runner.run(repo, cfg, "manual") == 1
+    assert libraryan_commits(repo) == []
+    assert "review: reviewer call failed:" in (state(repo) / "reports/latest.md").read_text()
+
+
+def health_run(repo, cfg):
+    """A new code commit already processed by a commit run, then the nightly health run."""
+    n = len(list(repo.glob("code*.py")))
+    (repo / f"code{n}.py").write_text("x\n")
+    git(repo, "add", f"code{n}.py")
+    git(repo, "commit", "-qm", "code")
+    (state(repo) / "last_processed").write_text(git(repo, "rev-parse", "HEAD"))
+    (state(repo) / "fake_claude_ran").unlink(missing_ok=True)
+    return runner.run(repo, cfg, "daily")
+
+
+def test_recurring_findings_are_audited(repo):
+    cfg = make_kb(repo)
+    give_finding(repo)
+    state(repo).mkdir(exist_ok=True)
+    (state(repo) / "last_processed").write_text(git(repo, "rev-parse", "HEAD"))
+    assert runner.run(repo, cfg, "daily") == 0
+    assert (state(repo) / "fake_claude_ran").exists()  # first sight: the model verifies them
+    assert health_run(repo, cfg) == 0
+    assert not (state(repo) / "fake_claude_ran").exists()  # same findings: free
+    t = last_trace(repo)
+    assert t["outcome"] == "audited" and t["audit_findings"] == 1 and t["calls"] == []
+    (repo / "README.md").write_text("# test\nRun `src/gone.py` and `src/new.py`.\n")
+    git(repo, "commit", "-qam", "readme", env={"LIBRARYAN": "1"})
+    assert health_run(repo, cfg) == 0
+    assert (state(repo) / "fake_claude_ran").exists()  # a new finding: model run
+
+
+def test_failed_health_run_does_not_store_findings(repo, monkeypatch):
+    cfg = make_kb(repo)
+    give_finding(repo)
+    state(repo).mkdir(exist_ok=True)
+    (state(repo) / "last_processed").write_text(git(repo, "rev-parse", "HEAD"))
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "badnote")
+    assert runner.run(repo, cfg, "daily") == 1
+    assert not (state(repo) / "last_health_findings.json").exists()
+
+
+def test_cap_keeps_failure_report(repo, monkeypatch):
+    cfg = make_kb(repo)
+    cfg["max_consecutive_failures"] = 1
+    commit_request(repo)
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "badnote")
+    assert runner.run(repo, cfg, "commit") == 1
+    failure = (state(repo) / "reports/latest.md").read_text()
+    reports = set((state(repo) / "reports").iterdir())
+    for i in range(2):
+        (repo / f"c{i}.py").write_text("x\n")  # new HEAD, so not backed off
+        git(repo, "add", f"c{i}.py")
+        git(repo, "commit", "-m", f"c{i}")
+        runner.run(repo, cfg, "commit")
+    assert last_trace(repo)["outcome"] == "capped"
+    latest = (state(repo) / "reports/latest.md").read_text()
+    line = "Daily cap reached: max_consecutive_failures; run `python3 .libraryan/bin/libraryan run` to override."
+    assert latest.startswith(failure) and latest.count(line) == 1
+    new = set((state(repo) / "reports").iterdir()) - reports
+    assert new and any(line in p.read_text() for p in new)
+
+
+def test_foreign_edit_skips_review(repo, monkeypatch):
+    cfg = make_kb(repo)
+    (repo / "app.py").write_text("x = 1\n")
+    (repo / "util.py").write_text("y = 1\n")
+    git(repo, "add", "app.py", "util.py")
+    git(repo, "commit", "-m", "code")
+    add_request(repo)
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "codeedit")
+    assert runner.run(repo, cfg, "manual") == 1
+    assert not (state(repo) / "fake_review_argv").exists()
+    t = last_trace(repo)
+    assert [c["role"] for c in t["calls"]] == ["author"] and t["transient"] is True
+    assert (state(repo) / "reports/latest.md").read_text().count("non-owned paths changed") == 1
+
+
+def test_transient_failures_not_in_streak(repo):
+    cfg = make_kb(repo)
+    prewrite(repo, 2, outcome="failed", calls=[])
+    prewrite(repo, 5, outcome="failed", calls=[], transient=True)
+    assert runner.cap_hit(state(repo), cfg) is None
+    prewrite(repo, 1, outcome="failed", calls=[])
+    assert runner.cap_hit(state(repo), cfg) == "max_consecutive_failures"

@@ -17,6 +17,7 @@ DEFAULTS = {
     "max_usd_run": 5,
     "max_usd_setup": 25,
     "max_usd_review": 2,
+    "max_usd_review_setup": 10,
     "independent_review": True,
     "reviewer_model": None,
     "review_timeout_minutes": 15,

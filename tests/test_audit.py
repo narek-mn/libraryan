@@ -113,6 +113,8 @@ def test_fresh_install_is_clean(repo):
     assert install.init(repo, Path(__file__).resolve().parent.parent, run_setup=False) == 0
     (repo / "docs/kb").mkdir(parents=True)
     (repo / "docs/kb/index.md").write_text("# Index\n")
+    (repo / "docs/kb/STYLE.md").write_text((repo / ".libraryan/templates/STYLE.md").read_text())  # setup copies it
+    (repo / "docs/kb/log.md").write_text("# Log\n\n## [2026-10-19] delete | old\n- removed `src/gone.py` notes\n")
     assert audit.run(repo, config.load(repo)) == []
 
 

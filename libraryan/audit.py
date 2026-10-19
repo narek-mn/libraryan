@@ -88,9 +88,11 @@ def run(root: Path, cfg: dict) -> list[Finding]:
         if text is None:
             continue
         out += [("broken-link", rel, raw) for raw, res in checks._links(root, rel, text) if not (root / res).exists()]
+        special = rel.startswith(kb + "/") and posixpath.basename(rel) in checks.SPECIAL
+        # STYLE.md's examples and log.md's history of deleted paths are not claims about the repo
         out += [("missing-path", rel, tok) for tok in TICK.findall(FENCE.sub("", text))
-                if looks_like_path(tok) and not resolve(tok, rel)]
-        if not rel.startswith(kb + "/") or posixpath.basename(rel) in checks.SPECIAL:
+                if not special and looks_like_path(tok) and not resolve(tok, rel)]
+        if not rel.startswith(kb + "/") or special:
             continue
         fm = frontmatter(text)
         if rel not in indexed:
