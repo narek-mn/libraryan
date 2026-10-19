@@ -12,6 +12,8 @@ from pathlib import Path
 modes = os.environ.get("FAKE_CLAUDE_MODE", "").split(",")
 Path(".libraryan/state/fake_claude_ran").write_text("")
 Path(".libraryan/state/fake_claude_prompt").write_text(sys.argv[-1])
+if "argv" in modes:
+    Path(".libraryan/state/fake_claude_argv").write_text(json.dumps(sys.argv))
 with open("docs/kb/index.md", "a") as f:
     f.write("- updated by fake claude\n")
 if "badnote" in modes:

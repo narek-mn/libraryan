@@ -535,3 +535,69 @@ def test_trace_failure_does_not_break_run(repo):
     assert runner.run(repo, cfg, "manual") == 0
     assert libraryan_commits(repo) == ["docs(libraryan): manual run"]
     assert (state(repo) / "last_processed").exists()
+
+
+def prewrite(repo, n, **rec):
+    st = state(repo)
+    st.mkdir(exist_ok=True)
+    for _ in range(n):
+        runner.trace.append(st, rec)
+
+
+def test_budget_flag_passed(repo, monkeypatch):
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "argv")
+    cfg = make_kb(repo)
+    add_request(repo)
+    runner.run(repo, cfg, "commit")
+    a = json.loads((state(repo) / "fake_claude_argv").read_text())
+    assert a[a.index("--max-budget-usd") + 1] == "5" and "--max-budget-usd" not in a[-1]
+    (repo / "docs/kb/index.md").unlink()
+    git(repo, "commit", "-qam", "rm", env={"LIBRARYAN": "1"})
+    runner.run(repo, cfg, "commit")  # no KB: becomes a setup run
+    a = json.loads((state(repo) / "fake_claude_argv").read_text())
+    assert a[a.index("--max-budget-usd") + 1] == "25"
+
+
+def test_cap_runs_per_day(repo):
+    cfg = make_kb(repo)
+    add_request(repo)
+    prewrite(repo, 24, outcome="committed", calls=[{"role": "author"}])
+    assert runner.run(repo, cfg, "commit") == 0
+    assert not (state(repo) / "fake_claude_ran").exists()
+    t = last_trace(repo)
+    assert t["outcome"] == "capped" and t["cap"] == "max_runs_per_day"
+
+
+def test_cap_consecutive_failures(repo):
+    cfg = make_kb(repo)
+    add_request(repo)
+    prewrite(repo, 3, outcome="failed", calls=[])
+    prewrite(repo, 1, outcome="noop", calls=[])  # ignored
+    assert runner.cap_hit(state(repo), cfg) == "max_consecutive_failures"
+    runner.run(repo, cfg, "commit")
+    assert last_trace(repo)["cap"] == "max_consecutive_failures"
+    prewrite(repo, 1, outcome="committed", calls=[])  # a success resets the streak
+    assert runner.cap_hit(state(repo), cfg) is None
+
+
+def test_cap_commits_per_day(repo):
+    cfg = make_kb(repo)
+    prewrite(repo, 12, outcome="committed", calls=[])
+    assert runner.cap_hit(state(repo), cfg) == "max_commits_per_day"
+
+
+def test_cap_ignored_for_manual(repo):
+    cfg = make_kb(repo)
+    add_request(repo)
+    prewrite(repo, 24, outcome="committed", calls=[{"role": "author"}])
+    runner.run(repo, cfg, "manual")
+    assert (state(repo) / "fake_claude_ran").exists() and last_trace(repo)["outcome"] == "committed"
+
+
+def test_cap_writes_report_line(repo):
+    cfg = make_kb(repo)
+    add_request(repo)
+    prewrite(repo, 3, outcome="aborted", calls=[])
+    runner.run(repo, cfg, "commit")
+    line = "Daily cap reached: max_consecutive_failures; run `libraryan run` to override."
+    assert line in (state(repo) / "reports/latest.md").read_text()

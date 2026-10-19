@@ -39,16 +39,16 @@ def read(st: Path, since_ts: str | None = None) -> list[dict]:
     for line in lines:
         try:
             r = json.loads(line)
-        except ValueError:
+        except (ValueError, RecursionError):
             continue
-        if isinstance(r, dict) and (since_ts is None or r.get("ts", "") >= since_ts):
+        if isinstance(r, dict) and isinstance(r.get("ts"), str) and (since_ts is None or r["ts"] >= since_ts):
             out.append(r)
     return out
 
 
 def today(st: Path) -> list[dict]:
     d = _ts()[:10]
-    return [r for r in read(st) if r.get("ts", "")[:10] == d]
+    return [r for r in read(st) if r["ts"][:10] == d]
 
 
 def stats(st: Path, days: int = 7) -> str:

@@ -40,7 +40,7 @@ def test_parse_output_error_json_keeps_usage():
 
 
 def test_read_survives_bad_bytes_and_partial_line(tmp_path):
-    (tmp_path / "runs.jsonl").write_bytes(b'{"outcome": "a"}\n\xff\xfe\n{"outcome": "b"}\n{"outco')
+    (tmp_path / "runs.jsonl").write_bytes(b'{"ts": "t", "outcome": "a"}\n\xff\xfe\n{"ts": "t", "outcome": "b"}\n{"outco')
     assert [r["outcome"] for r in trace.read(tmp_path)] == ["a", "b"]
 
 
@@ -48,3 +48,12 @@ def test_append_never_raises(tmp_path):
     (tmp_path / "runs.jsonl").mkdir()
     trace.append(tmp_path, {"outcome": "x"})
     trace.append(tmp_path / "missing", {"outcome": "x"})
+
+
+def test_corrupt_lines_ignored(tmp_path):
+    trace.append(tmp_path, {"outcome": "committed"})
+    with open(tmp_path / "runs.jsonl", "a") as f:
+        f.write('{"ts": 5}\n{}\n' + "[" * 100000 + "\n")
+    assert [r["outcome"] for r in trace.today(tmp_path)] == ["committed"]
+    assert len(trace.read(tmp_path, "2001-01-01T00:00:00Z")) == 1
+    trace.stats(tmp_path)

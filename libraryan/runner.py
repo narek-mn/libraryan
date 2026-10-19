@@ -274,12 +274,29 @@ def _on_default(root: Path, cfg: dict) -> bool:
         return False
 
 
+def cap_hit(st: Path, cfg: dict) -> str | None:
+    """Name of the first daily cap reached, from the run trace."""
+    recs = trace.today(st)
+    if sum(bool(r.get("calls")) for r in recs) >= cfg["max_runs_per_day"]:
+        return "max_runs_per_day"
+    if sum(r.get("outcome") == "committed" for r in recs) >= cfg["max_commits_per_day"]:
+        return "max_commits_per_day"
+    fails = 0
+    for r in reversed(trace.read(st)):  # trailing, across days
+        if r.get("outcome") in ("noop", "deferred", "capped", "audited"):
+            continue
+        if r.get("outcome") not in ("failed", "aborted"):
+            break
+        fails += 1
+    return "max_consecutive_failures" if fails >= cfg["max_consecutive_failures"] else None
+
+
 def _trace(st: Path, reason: str, head: str, outcome: str, calls=(), changed=(), root: Path | None = None,
-           problems=(), commit=None) -> None:
+           problems=(), commit=None, cap=None) -> None:
     """The one trace record of a run() loop iteration; cap and audit_findings are filled by later features."""
     trace.append(st, {"reason": reason, "head": head, "outcome": outcome, "calls": list(calls),
                       "changed": len(changed), "deleted": sum(not (root / p).exists() for p in changed) if root else 0,
-                      "problems": len(problems), "commit": commit, "cap": None, "audit_findings": 0})
+                      "problems": len(problems), "commit": commit, "cap": cap, "audit_findings": 0})
 
 
 def _head_or_none(root: Path) -> str | None:
@@ -308,6 +325,12 @@ def run(root: Path, cfg: dict, reason: str, extra_paths=()) -> int:
             if not (work["requests"] or work["commits"] or work["health"] or reason == "setup"):
                 _trace(st, reason, work["head"], "noop")
                 return 0
+            # --- daily cap check (manual and setup runs ignore it) ---
+            cap = None if reason in ("manual", "setup") else cap_hit(st, cfg)
+            if cap:
+                _report(st, reason, work, [], [], f"Daily cap reached: {cap}; run `libraryan run` to override.")
+                _trace(st, reason, work["head"], "capped", cap=cap)
+                return 0
             snap = _snapshot(root, cfg)
             staged_before, dirty_before = _staged(root), set(_baseline(root))
             # installer files (already committed by the installer) are listed on their own, never baseline
@@ -318,6 +341,7 @@ def run(root: Path, cfg: dict, reason: str, extra_paths=()) -> int:
             if cfg["model"]:
                 cmd += ["--model", cfg["model"]]
             timeout = cfg["setup_timeout_minutes" if reason == "setup" else "run_timeout_minutes"] * 60
+            cmd += ["--max-budget-usd", str(cfg["max_usd_setup" if reason == "setup" else "max_usd_run"])]
             output, calls = "", []
             try:
                 output, problems, usage = _call_model([*cmd, build_prompt(reason, work, cfg)], root, timeout)
