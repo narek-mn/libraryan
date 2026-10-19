@@ -213,10 +213,11 @@ def test_init_with_setup_runs_runner_with_installer_files(repo, monkeypatch):
     git(repo, "commit", "-m", "kb")
     monkeypatch.setattr(install.shutil, "which", lambda name: str(FAKE) if name == "claude" else None)
     assert install.init(repo, SRC) == 0
-    assert subject(repo) == "docs(libraryan): setup run"
-    committed = git(repo, "show", "--name-only", "--format=", "HEAD").stdout.split()
-    assert "AGENTS.md" in committed and ".libraryan/config.json" in committed and "docs/kb/index.md" in committed
-    assert "src.py" not in committed
+    assert git(repo, "log", "-2", "--format=%s").stdout.split("\n")[:2] == [
+        "docs(libraryan): setup run", "docs(libraryan): install"]
+    installed = git(repo, "show", "--name-only", "--format=", "HEAD~1").stdout.split()
+    assert "AGENTS.md" in installed and ".libraryan/config.json" in installed and "src.py" not in installed
+    assert git(repo, "show", "--name-only", "--format=", "HEAD").stdout.split() == ["docs/kb/index.md"]
     prompt = (repo / ".libraryan/state/fake_claude_prompt").read_text()
     installer = prompt.split("Installer files")[1].split("Baseline")[0]
     baseline = prompt.split("Baseline")[1]
@@ -308,3 +309,111 @@ def test_upgrade_refuses_pending_untracked_request(repo):
     (repo / ".libraryan/requests/20261019-120000-x.md").write_text("in progress\n")
     assert install.upgrade(repo, SRC) != 0
     assert git(repo, "rev-parse", "HEAD").stdout == head
+
+
+def test_init_with_broken_link_in_existing_agents_md(repo):
+    (repo / "AGENTS.md").write_text("# Rules\n\nSee [old](missing.md).\n")
+    git(repo, "add", "AGENTS.md")
+    git(repo, "commit", "-m", "agents")
+    assert install.init(repo, SRC, run_setup=False) == 0
+    assert subject(repo) == "docs(libraryan): install"
+
+
+def test_init_rolls_back_on_commit_failure(repo, monkeypatch, fake_crontab):
+    (repo / "AGENTS.md").write_text("# Rules\n")
+    git(repo, "add", "AGENTS.md")
+    git(repo, "commit", "-m", "agents")
+    head = git(repo, "rev-parse", "HEAD").stdout
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    for v in ("EMAIL", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL"):
+        monkeypatch.delenv(v, raising=False)
+    git(repo, "config", "--unset", "user.email")
+    git(repo, "config", "user.useConfigOnly", "true")  # commit fails: no identity
+    assert install.init(repo, SRC, run_setup=False) == 1
+    assert git(repo, "rev-parse", "HEAD").stdout == head
+    assert git(repo, "config", "core.hooksPath", check=False).stdout == ""
+    assert not fake_crontab.exists()
+    assert git(repo, "status", "--porcelain", "--ignored").stdout == ""
+    assert (repo / "AGENTS.md").read_text() == "# Rules\n"
+    assert not (repo / ".libraryan").exists() and not (repo / ".claude").exists()
+    git(repo, "config", "user.email", "test@example.com")
+    assert install.init(repo, SRC, run_setup=False) == 0
+
+
+def test_init_aborts_on_secret_in_installer_file(repo):
+    (repo / "CLAUDE.md").write_text("token = 'abcdefghijklmnop'\n")
+    git(repo, "add", "CLAUDE.md")
+    git(repo, "commit", "-m", "claude")
+    assert install.init(repo, SRC, run_setup=False) == 1
+    assert git(repo, "status", "--porcelain").stdout == ""
+
+
+def test_init_malformed_settings_writes_nothing(repo):
+    (repo / ".claude").mkdir()
+    (repo / ".claude/settings.json").write_text("{not json")
+    git(repo, "add", ".claude")
+    git(repo, "commit", "-m", "settings")
+    assert install.init(repo, SRC, run_setup=False) == 1
+    assert git(repo, "status", "--porcelain", "--ignored").stdout == ""
+
+
+def test_init_claude_md_symlink(repo):
+    (repo / "AGENTS.md").write_text("# Rules\n")
+    (repo / "CLAUDE.md").symlink_to("AGENTS.md")
+    git(repo, "add", "AGENTS.md", "CLAUDE.md")
+    git(repo, "commit", "-m", "agents")
+    assert install.init(repo, SRC, run_setup=False) == 0
+    assert (repo / "CLAUDE.md").is_symlink()
+    assert "@AGENTS.md" not in (repo / "AGENTS.md").read_text()
+    assert config.load(repo)["claude_md_symlink"] is True
+    work = {"requests": [], "since": None, "commits": 0, "health": True, "baseline": [], "extra": ["AGENTS.md"]}
+    assert "symlink" in runner.build_prompt("setup", work, config.load(repo))
+
+
+def test_uninstall_refuses_dirty_targets(repo):
+    install.init(repo, SRC, run_setup=False)
+    (repo / "CLAUDE.md").write_text("@AGENTS.md\nmy edit\n")
+    assert install.uninstall(repo) == 1
+    assert (repo / ".libraryan").exists() and "my edit" in (repo / "CLAUDE.md").read_text()
+
+
+def test_uninstall_refuses_untracked_requests(repo, capsys):
+    install.init(repo, SRC, run_setup=False)
+    (repo / ".libraryan/requests/20261019-120000-x.md").write_text("in progress\n")
+    assert install.uninstall(repo) == 1
+    assert ".libraryan/requests/20261019-120000-x.md" in capsys.readouterr().err
+    assert (repo / ".libraryan/requests/20261019-120000-x.md").exists()
+
+
+def test_crontab_left_alone_when_unreadable(repo, tmp_path_factory, monkeypatch):
+    d = tmp_path_factory.mktemp("badcron")
+    (d / "table").write_text("5 * * * * keep me\n")
+    script = d / "crontab"
+    script.write_text(f"""#!/bin/sh
+if [ "$1" = -l ]; then echo "crontab: permission denied" >&2; exit 1; fi
+cat > '{d}/table'
+""")
+    script.chmod(0o755)
+    monkeypatch.setattr(install, "crontab_cmd", str(script))
+    assert install.init(repo, SRC, run_setup=False) == 0
+    assert (d / "table").read_text() == "5 * * * * keep me\n"
+
+
+def test_commit_with_no_installer_files_commits_nothing(repo):
+    (repo / "src.py").write_text("x = 1\n")
+    git(repo, "add", "src.py")
+    head = git(repo, "rev-parse", "HEAD").stdout
+    assert install._commit(repo, "install", config.load(repo)) == 0
+    assert git(repo, "rev-parse", "HEAD").stdout == head
+    assert git(repo, "status", "--porcelain").stdout.strip() == "A  src.py"
+
+
+def test_global_hooks_path_ignored(repo, tmp_path, monkeypatch):
+    g = tmp_path / "gitconfig"
+    g.write_text("[core]\n\thooksPath = /global/hooks\n")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(g))
+    install.init(repo, SRC, run_setup=False)
+    assert config.load(repo)["chain_hooks_path"] is None
+    install.uninstall(repo)
+    assert git(repo, "config", "--local", "core.hooksPath", check=False).stdout == ""

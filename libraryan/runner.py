@@ -99,8 +99,10 @@ def _bullets(paths: list[str], cap: int = 200) -> str:
 def build_prompt(reason: str, work: dict, cfg: dict) -> str:
     reqs = "\n".join(f"- {r}" for r in work["requests"]) or "- (none)"
     base = _bullets(work.get("baseline", []))
+    link = ("\n- CLAUDE.md and AGENTS.md are one file through a symlink: leave the link as it is."
+            if cfg.get("claude_md_symlink") else "")
     extra = (f"""Installer files (written by setup; you may edit them, but keep the `<!-- libraryan:start -->…<!-- libraryan:end -->` block in AGENTS.md and the `@AGENTS.md` line in CLAUDE.md exactly as they are):
-{_bullets(work["extra"])}
+{_bullets(work["extra"])}{link}
 
 """ if work.get("extra") else "")
     since = (f"{work['commits']} new commit(s) since {work['since']} (see git log/diff {work['since']}..HEAD)"
@@ -240,7 +242,7 @@ def run(root: Path, cfg: dict, reason: str, extra_paths=()) -> int:
                 return 0
             snap = _snapshot(root, cfg)
             staged_before = _staged(root)
-            # installer files are listed on their own and committed with the run, never baseline
+            # installer files (already committed by the installer) are listed on their own, never baseline
             work["baseline"] = sorted(set(_baseline(root)) - set(work["requests"]) - set(extra_paths))
             work["extra"] = sorted(extra_paths)
             cmd = [cfg["claude_bin"], "-p", "--agent", "libraryan", "--permission-mode", "acceptEdits",
@@ -272,7 +274,7 @@ def run(root: Path, cfg: dict, reason: str, extra_paths=()) -> int:
             # deletions count only for paths HEAD has (a deleted never-committed file needs no commit)
             in_head = set(_z(root, "ls-tree", "-r", "--name-only", "HEAD", "--", *diff)) if diff else set()
             baseline = set(work["baseline"])  # another agent's work in progress is never committed
-            changed = [p for p in dict.fromkeys([*diff, *extra_paths])
+            changed = [p for p in diff
                        if (p in tracked or (root / p).exists() or p in in_head) and p not in baseline]
             problems += checks.run_all(root, cfg, [p for p in changed if p.endswith(".md")])
             if not _on_default(root, cfg):  # another agent switched branch during the run

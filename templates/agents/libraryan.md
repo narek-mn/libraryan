@@ -18,7 +18,7 @@ The runner starts you with a prompt that states:
 - The pending request files in `.libraryan/requests/`.
 - The commits since the last processed commit (`<sha>..HEAD`), or that none is recorded.
 - Whether the health check is due.
-- During setup only, the **installer files**: what the installer just wrote (`.libraryan/`, `.claude/`, `AGENTS.md` with its Libraryan block, `CLAUDE.md` with its `@AGENTS.md` line). They are committed with your run.
+- During setup only, the **installer files**: what the installer just wrote (`.libraryan/`, `.claude/`, `AGENTS.md` with its Libraryan block, `CLAUDE.md` with its `@AGENTS.md` line). The installer has already committed them; your edits to them are committed with your run.
 - The **baseline**: paths that were already changed or untracked before you started. They are not yours.
 
 Step 0, before touching anything: read the baseline. Never edit, move, delete, undo or review a baseline path, and never pass one to the reviewer as your change. The runner never commits a baseline path, even if you change it. Installer files are not baseline: during setup you may edit `AGENTS.md`, `CLAUDE.md` and other agent instruction files among them, but keep the `<!-- libraryan:start -->`…`<!-- libraryan:end -->` block in `AGENTS.md` and the `@AGENTS.md` line in `CLAUDE.md` exactly as they are.

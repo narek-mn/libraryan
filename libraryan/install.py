@@ -10,7 +10,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import config, gitutil, runner
+from . import config, gitutil, precommit, runner
 from .paths import is_protected
 
 crontab_cmd = "crontab"  # tests patch this to a fake; tests never touch the real user crontab
@@ -58,6 +58,8 @@ def _crontab(project: Path, line: str | None) -> None:
     tag = f"# libraryan:{project}"
     try:
         r = subprocess.run([crontab_cmd, "-l"], capture_output=True, text=True)
+        if r.returncode and "no crontab" not in r.stderr.lower():  # unreadable: rewriting would wipe it
+            raise OSError(r.stderr.strip() or f"crontab -l exited {r.returncode}")
         lines = [l for l in (r.stdout.splitlines() if r.returncode == 0 else []) if not l.endswith(tag)]
         if line:
             lines.append(f"{line} {tag}")
@@ -94,23 +96,52 @@ def _files(project: Path) -> list[str]:
     return sorted({p for p in (now + "\0" + head).split("\0") if p})
 
 
-def _commit(project: Path, what: str) -> int:
+def _commit(project: Path, what: str, cfg: dict) -> int:
+    """Commit only the installer's files. No hooks: existing docs' lint problems are the setup run's job and
+    the user's linters must not judge vendored code; secrets are scanned here instead."""
     files = _files(project)
+    if not files:  # an empty pathspec would add and commit the whole tree
+        return 0
     gitutil.git(project, "add", "-A", "--", *files)
+    staged = [c for c in gitutil.staged_changes(project) if c[1] in set(files) and is_protected(c[1], cfg)]
     if not gitutil.git(project, "diff", "--cached", "--name-only", "--", *files):
         print(f"libraryan: nothing to commit for {what}")
         return 0
-    r = subprocess.run(["git", "commit", "-q", "-m", f"docs(libraryan): {what}", "--", *files], cwd=project,
-                       env={**os.environ, "LIBRARYAN": "1"}, capture_output=True, text=True)
+    problems = precommit._scan_staged(project, staged)
+    if problems:
+        print(f"libraryan: {what} aborted, possible secrets:\n  " + "\n  ".join(problems), file=sys.stderr)
+        return 1
+    r = subprocess.run(["git", "commit", "-q", "--no-verify", "-m", f"docs(libraryan): {what}", "--", *files],
+                       cwd=project, env={**os.environ, "LIBRARYAN": "1"}, capture_output=True, text=True)
     if r.returncode:
         print(f"libraryan: {what} commit failed:\n{r.stderr or r.stdout}", file=sys.stderr)
     return r.returncode
 
 
-def _dirty(project: Path, cfg: dict) -> bool:
-    """Uncommitted docs or installer paths (e.g. a request still being written) would be swept into our commit."""
+def _rollback(project: Path) -> None:
+    """Undo init's writes. Installer paths were clean before init, so HEAD is their pre-init state."""
+    files = _files(project)
+    if not files:
+        return
+    gitutil.git(project, "reset", "-q", "--", *files, check=False)
+    in_head = set(gitutil.git(project, "ls-tree", "-r", "-z", "--name-only", "HEAD", "--", *files,
+                              check=False).split("\0"))
+    for f in files:
+        if f in in_head:
+            gitutil.git(project, "checkout", "HEAD", "--", f)
+        else:
+            (project / f).unlink(missing_ok=True)
+            try:
+                os.removedirs((project / f).parent)  # prune directories left empty
+            except OSError:
+                pass
+
+
+def _dirty(project: Path, cfg: dict, docs: bool = True) -> bool:
+    """Uncommitted installer paths (e.g. a request still being written) or, with `docs`, owned docs: they
+    would be swept into our commit or deleted."""
     dirty = [p for p in runner._baseline(project)
-             if is_protected(p, cfg) or any(p == x or p.startswith(x + "/") for x in PATHS)]
+             if (docs and is_protected(p, cfg)) or any(p == x or p.startswith(x + "/") for x in PATHS)]
     if dirty:
         print("libraryan: commit or stash these changes first:\n  " + "\n  ".join(dirty), file=sys.stderr)
     return bool(dirty)
@@ -134,58 +165,66 @@ def init(project: Path, source: Path, run_setup: bool = True) -> int:
     if not claude and run_setup:
         print("libraryan: `claude` not found on PATH; install Claude Code, or use --no-setup", file=sys.stderr)
         return 1
+    settings = project / ".claude/settings.json"
+    try:
+        old = json.loads(settings.read_text()) if settings.exists() else {}
+        if not isinstance(old, dict):
+            raise ValueError("not a JSON object")
+    except ValueError as e:
+        print(f"libraryan: .claude/settings.json is not valid ({e}); fix it first", file=sys.stderr)
+        return 1
+    agents, claude_md = project / "AGENTS.md", project / "CLAUDE.md"
+    linked = ((claude_md.is_symlink() and claude_md.resolve() == agents.resolve())
+              or (agents.is_symlink() and agents.resolve() == claude_md.resolve()))
 
     _copy(project, source)
-    hooks_path = gitutil.git(project, "config", "core.hooksPath", check=False)
+    hooks_path = gitutil.git(project, "config", "--local", "core.hooksPath", check=False)
     if hooks_path and (project / hooks_path).resolve() != (project / HOOKS_PATH).resolve():  # never chain to self
         cfg["chain_hooks_path"] = hooks_path
-    settings = project / ".claude/settings.json"
     if not settings.exists():
         cfg["created_settings"] = True
     cfg.update(default_branch=branch, runner_host=socket.gethostname(), claude_bin=claude or "claude",
-               source_path=str(source))
+               source_path=str(source), claude_md_symlink=linked)
     config.save(project, cfg)
-    old = json.loads(settings.read_text()) if settings.exists() else {}
     settings.write_text(json.dumps(merge_settings(old), indent=2) + "\n")
-    agents = project / "AGENTS.md"
     text = agents.read_text() if agents.exists() else ""
     if START not in text or END not in text:
         block = (source / "templates/agents-block.md").read_text().strip() + "\n"
         agents.write_text(text.rstrip("\n") + "\n\n" + block if text.strip() else block)
-    claude_md = project / "CLAUDE.md"
     text = claude_md.read_text() if claude_md.exists() else ""
-    if "@AGENTS.md" not in text.splitlines():
+    if not linked and "@AGENTS.md" not in text.splitlines():  # through a link AGENTS.md would import itself
         claude_md.write_text(text.rstrip("\n") + "\n\n@AGENTS.md\n" if text.strip() else "@AGENTS.md\n")
-    gitutil.git(project, "config", "core.hooksPath", HOOKS_PATH)
+    if _commit(project, "install", cfg):
+        _rollback(project)
+        print("libraryan: install rolled back; nothing was changed", file=sys.stderr)
+        return 1
+    # enabled only once the install is committed, so a failed install leaves no hooks or cron behind
+    gitutil.git(project, "config", "--local", "core.hooksPath", HOOKS_PATH)
     _crontab(project, f"0 3 * * * cd '{project}' && python3 {MARK} run --reason daily")
-
     if not run_setup:
-        return _commit(project, "install")
-    code = runner.run(project, config.load(project), "setup", extra_paths=_files(project))
-    if gitutil.git(project, "status", "--porcelain", "--", *_files(project)):
-        # setup failed: commit the install anyway so the lock is consistent; setup can be retried on its own
-        print("libraryan: setup run failed (see .libraryan/state/reports/latest.md); retry with "
-              f"`python3 {MARK} run --reason setup`", file=sys.stderr)
-        return _commit(project, "install") or 1
-    return code
+        return 0
+    return runner.run(project, config.load(project), "setup", extra_paths=_files(project))
 
 
 def upgrade(project: Path, source: Path) -> int:
     project = Path(project)
-    if _dirty(project, config.load(project)):
+    cfg = config.load(project)
+    if _dirty(project, cfg):
         return 1
     _copy(project, Path(source))
-    config.save(project, config.load(project))  # adds keys new in DEFAULTS, keeps existing values
-    return _commit(project, "upgrade")
+    config.save(project, cfg)  # adds keys new in DEFAULTS, keeps existing values
+    return _commit(project, "upgrade", cfg)
 
 
 def uninstall(project: Path) -> int:
     project = Path(project)
     cfg = config.load(project)
+    if _dirty(project, cfg, docs=False):  # includes untracked requests, which rmtree would destroy
+        return 1
     if cfg["chain_hooks_path"]:
-        gitutil.git(project, "config", "core.hooksPath", cfg["chain_hooks_path"])
+        gitutil.git(project, "config", "--local", "core.hooksPath", cfg["chain_hooks_path"])
     else:
-        gitutil.git(project, "config", "--unset", "core.hooksPath", check=False)
+        gitutil.git(project, "config", "--local", "--unset", "core.hooksPath", check=False)
     _crontab(project, None)
     agents = project / "AGENTS.md"
     if agents.exists():
@@ -202,4 +241,4 @@ def uninstall(project: Path) -> int:
         (project / p).unlink(missing_ok=True)
     shutil.rmtree(project / ".claude/skills/libraryan-request", ignore_errors=True)
     shutil.rmtree(project / ".libraryan", ignore_errors=True)
-    return _commit(project, "uninstall")
+    return _commit(project, "uninstall", cfg)
