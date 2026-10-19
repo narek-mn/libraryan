@@ -152,8 +152,15 @@ def test_wait_debounces(repo, monkeypatch):
     assert ran == [(900 + cfg["debounce_minutes"] * 60, "commit")]
 
 
+def give_finding(repo):
+    """A committed audit finding, so a health run calls the model."""
+    (repo / "README.md").write_text("# test\nRun `src/gone.py`.\n")
+    git(repo, "commit", "-qam", "readme", env={"LIBRARYAN": "1"})
+
+
 def test_cli_run_end_to_end(repo):
     cfg = make_kb(repo)
+    give_finding(repo)
     config.save(repo, cfg)
     r = subprocess.run([str(repo / ".libraryan/bin/libraryan"), "run", "--reason", "daily"], cwd=repo,
                        capture_output=True, text=True)
@@ -464,6 +471,7 @@ def test_missing_index_promotes_to_setup(repo):
 
 def test_daily_health_skipped_on_idle_repo(repo):
     cfg = make_kb(repo)
+    give_finding(repo)
     assert runner.run(repo, cfg, "daily") == 0
     (state(repo) / "fake_claude_ran").unlink()
     assert runner.run(repo, cfg, "daily") == 0
@@ -549,7 +557,7 @@ def prewrite(repo, n, **rec):
 def test_budget_flag_passed(repo, monkeypatch):
     monkeypatch.setenv("FAKE_CLAUDE_MODE", "argv")
     cfg = make_kb(repo)
-    add_request(repo)
+    give_finding(repo)  # an untracked request is no work; a finding makes the health run a model run
     runner.run(repo, cfg, "commit")
     a = json.loads((state(repo) / "fake_claude_argv").read_text())
     assert a[a.index("--max-budget-usd") + 1] == "5" and "--max-budget-usd" not in a[-1]
@@ -562,7 +570,7 @@ def test_budget_flag_passed(repo, monkeypatch):
 
 def test_cap_runs_per_day(repo):
     cfg = make_kb(repo)
-    add_request(repo)
+    give_finding(repo)  # an untracked request is no work; a finding makes the health run a model run
     prewrite(repo, 24, outcome="committed", calls=[{"role": "author"}])
     assert runner.run(repo, cfg, "commit") == 0
     assert not (state(repo) / "fake_claude_ran").exists()
@@ -572,7 +580,7 @@ def test_cap_runs_per_day(repo):
 
 def test_cap_consecutive_failures(repo):
     cfg = make_kb(repo)
-    add_request(repo)
+    give_finding(repo)  # an untracked request is no work; a finding makes the health run a model run
     prewrite(repo, 3, outcome="failed", calls=[])
     prewrite(repo, 1, outcome="noop", calls=[])  # ignored
     assert runner.cap_hit(state(repo), cfg) == "max_consecutive_failures"
@@ -598,7 +606,7 @@ def test_cap_ignored_for_manual(repo):
 
 def test_cap_writes_report_line(repo):
     cfg = make_kb(repo)
-    add_request(repo)
+    give_finding(repo)  # an untracked request is no work; a finding makes the health run a model run
     prewrite(repo, 3, outcome="aborted", calls=[])
     runner.run(repo, cfg, "commit")
     line = "Daily cap reached: max_consecutive_failures; run `libraryan run` to override."
@@ -739,3 +747,43 @@ def test_commit_failure_backs_off(repo, monkeypatch):
     assert runner.run(repo, cfg, "manual") == 1
     assert (state(repo) / "last_failed").read_text().strip() == git(repo, "rev-parse", "HEAD").strip()
     assert "hook rejected" in (state(repo) / "reports/latest.md").read_text()
+
+
+def test_clean_health_run_skips_model(repo):
+    cfg = make_kb(repo)
+    assert runner.run(repo, cfg, "daily") == 0
+    assert not (state(repo) / "fake_claude_ran").exists()
+    t = last_trace(repo)
+    assert t["outcome"] == "audited" and t["audit_findings"] == 0 and t["calls"] == []
+    assert (state(repo) / "last_health_head").read_text().strip() == git(repo, "rev-parse", "HEAD").strip()
+    assert (state(repo) / "last_health").exists()
+
+
+def test_clean_health_run_not_capped(repo):
+    cfg = make_kb(repo)
+    prewrite(repo, cfg["max_runs_per_day"], outcome="nothing_changed", calls=[{"role": "author"}])
+    runner.run(repo, cfg, "daily")
+    assert last_trace(repo)["outcome"] == "audited"
+
+
+def test_health_with_findings_calls_model_with_list(repo):
+    cfg = make_kb(repo)
+    give_finding(repo)
+    state(repo).mkdir(exist_ok=True)
+    (state(repo) / "last_processed").write_text(git(repo, "rev-parse", "HEAD"))
+    assert runner.run(repo, cfg, "daily") == 0
+    prompt = (state(repo) / "fake_claude_prompt").read_text()
+    assert "Audit findings (verify each; fix the doc or flag it):" in prompt
+    assert "missing-path README.md: src/gone.py" in prompt
+    assert last_trace(repo)["audit_findings"] == 1
+
+
+def test_audit_tool_allowed():
+    assert "Bash(python3 .libraryan/bin/libraryan audit:*)" in runner.ALLOWED_TOOLS.split(",")
+
+
+def test_cli_audit(repo):
+    make_kb(repo)
+    (repo / "README.md").write_text("# test\n`src/gone.py`\n")
+    r = subprocess.run([str(repo / ".libraryan/bin/libraryan"), "audit"], cwd=repo, capture_output=True, text=True)
+    assert r.returncode == 0 and r.stdout == "missing-path README.md: src/gone.py\n"

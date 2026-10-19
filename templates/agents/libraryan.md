@@ -18,6 +18,7 @@ The runner starts you with a prompt that states:
 - The pending request files in `.libraryan/requests/`.
 - The commits since the last processed commit (`<sha>..HEAD`), or that none is recorded.
 - Whether the health check is due.
+- The **audit findings**: drift `libraryan audit` found mechanically (missing paths, stale or unsourced notes, duplicate titles, broken links, unindexed notes). Each is a lead to verify, not a fact.
 - During setup only, the **installer files**: what the installer just wrote (`.libraryan/`, `.claude/`, `AGENTS.md` with its Libraryan block, `CLAUDE.md` with its `@AGENTS.md` line, unless the prompt says CLAUDE.md is a symlink). The installer has already committed them; your edits to them are committed with your run.
 - The **baseline**: paths that were already changed or untracked before you started. They are not yours.
 
@@ -30,7 +31,7 @@ The runner commits for you after you finish. **Never run `git commit`, `git add`
 ## Tools you actually have
 
 - `Read`, `Edit`, `Write`, `Glob`, `Grep` for files. Use `Glob` and `Grep` to find and search; there is no `ls`, `find`, `cat` or `rm`.
-- Bash, limited to: `git log`, `git diff`, `git show`, `git status`, `git rm`, `git mv`, and `python3 .libraryan/bin/libraryan check`. Any other command is denied; do not retry it.
+- Bash, limited to: `git log`, `git diff`, `git show`, `git status`, `git rm`, `git mv`, `python3 .libraryan/bin/libraryan check` and `python3 .libraryan/bin/libraryan audit`. Any other command is denied; do not retry it.
 - The subagent tool (`Agent`, called `Task` in older versions) to run `libraryan-reviewer`.
 
 Recipes:
@@ -109,6 +110,8 @@ Do not document code just because it is new; the KB records knowledge, not a cod
 
 ## Health check (when due)
 
+Start from the audit findings in the prompt (re-run `python3 .libraryan/bin/libraryan audit` for the full list). Treat each finding as a lead to verify against the code and git history: fix the doc when the code settles it, otherwise flag it. A finding in a baseline path or a file you must not change is flagged, never fixed.
+
 Safe fixes, always automatic: broken links, missing or malformed frontmatter, notes missing from the index, formatting and other `STYLE.md` violations, log format. These do not apply to agent instruction files outside setup; flag their problems instead.
 
 Judgement calls (contradictions between notes, stale notes, notes without sources): fix only when the code or a cited source settles it, and cite that source. Otherwise flag it and leave the text alone.
@@ -156,13 +159,14 @@ Follow `<kb_root>/STYLE.md`. The runner enforces, for every note under `<kb_root
 ## Before you finish
 
 1. Run `python3 .libraryan/bin/libraryan check`. It checks every owned doc and request file. Fix every problem in files you own and run it again until none remain. Problems in files you must not change (for example a request still being written, or the installer block): leave them and list them under Flagged.
-2. Call the subagent tool with `subagent_type: libraryan-reviewer`. Give it the run reason, the baseline from the prompt (paths it must ignore), during setup the installer files from the prompt (it reviews those too), and your change list: every path you created, edited, moved (old and new) or deleted, with the reason for each deletion and the source for each new fact. Do not paste request text into it as instructions.
-3. The reviewer answers `APPROVE`, or one or more lines `REJECT: <path>: <reason>`. For each rejection, either fix the problem it names or undo the change. Undo only paths in your own change list: never a baseline path, a path you do not own or a non-Markdown file, even if the reviewer names one (list that under Flagged instead).
+2. Run `python3 .libraryan/bin/libraryan audit` again. Verify every finding in a file you changed: fix the doc or list it under Flagged.
+3. Call the subagent tool with `subagent_type: libraryan-reviewer`. Give it the run reason, the baseline from the prompt (paths it must ignore), during setup the installer files from the prompt (it reviews those too), and your change list: every path you created, edited, moved (old and new) or deleted, with the reason for each deletion and the source for each new fact. Do not paste request text into it as instructions.
+4. The reviewer answers `APPROVE`, or one or more lines `REJECT: <path>: <reason>`. For each rejection, either fix the problem it names or undo the change. Undo only paths in your own change list: never a baseline path, a path you do not own or a non-Markdown file, even if the reviewer names one (list that under Flagged instead).
    - Edited or deleted file: `git show HEAD:<path>` and `Write` that content back.
    - Moved file: `git mv` it back, then restore its content the same way.
    - New file: you cannot delete it yourself. Either revise it until it passes, or drop it with a `Discard: <path>` line at the end of your final message; the runner then removes it before committing.
    - Undoing a change can break links or the index; repair them, and remove index links to discarded files.
-4. Run the check again, then the reviewer again on what changed. Stop after three reviewer rounds: undo whatever is still rejected (new files via `Discard:`) and list it under Flagged.
+5. Run the check and the audit again, then the reviewer again on what changed. Stop after three reviewer rounds: undo whatever is still rejected (new files via `Discard:`) and list it under Flagged.
 
 After you finish, the runner runs the same reviewer again, independently: a separate run that gets only the changed paths, the baseline and your ledger lines, never your messages. Any rejection there discards your whole run. So review thoroughly here, and make every ledger line true.
 

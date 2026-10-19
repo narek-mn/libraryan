@@ -9,11 +9,12 @@ import sys
 import time
 from pathlib import Path
 
-from . import checks, gitutil, ledger, review, trace
+from . import audit, checks, gitutil, ledger, review, trace
 from .paths import is_protected, is_request
 
 ALLOWED_TOOLS = ("Read,Edit,Write,Glob,Grep,Task,Agent,Bash(git log:*),Bash(git diff:*),Bash(git show:*),"
-                 "Bash(git status:*),Bash(git rm:*),Bash(git mv:*),Bash(python3 .libraryan/bin/libraryan check:*)")
+                 "Bash(git status:*),Bash(git rm:*),Bash(git mv:*),Bash(python3 .libraryan/bin/libraryan check:*),"
+                 "Bash(python3 .libraryan/bin/libraryan audit:*)")
 
 STATE = ".libraryan/state"
 FOREIGN = "non-owned paths changed"
@@ -128,6 +129,9 @@ Pending request files:
 
 {since}
 Health check due: {"yes" if work["health"] else "no"}.
+
+Audit findings (verify each; fix the doc or flag it):
+{audit.format(work.get("audit", []))}
 
 {extra}Baseline (pre-existing changes, not yours — never review, edit or undo them):
 {base}
@@ -294,11 +298,11 @@ def cap_hit(st: Path, cfg: dict) -> str | None:
 
 
 def _trace(st: Path, reason: str, head: str, outcome: str, calls=(), changed=(), deleted=(),
-           problems=(), commit=None, cap=None) -> None:
-    """The one trace record of a run() loop iteration; cap and audit_findings are filled by later features."""
+           problems=(), commit=None, cap=None, findings=()) -> None:
+    """The one trace record of a run() loop iteration."""
     trace.append(st, {"reason": reason, "head": head, "outcome": outcome, "calls": list(calls),
                       "changed": len(changed), "deleted": len(deleted),
-                      "problems": len(problems), "commit": commit, "cap": cap, "audit_findings": 0})
+                      "problems": len(problems), "commit": commit, "cap": cap, "audit_findings": len(findings)})
 
 
 def _head_or_none(root: Path) -> str | None:
@@ -327,11 +331,23 @@ def run(root: Path, cfg: dict, reason: str, extra_paths=()) -> int:
             if not (work["requests"] or work["commits"] or work["health"] or reason == "setup"):
                 _trace(st, reason, work["head"], "noop")
                 return 0
+            try:
+                work["audit"] = audit.run(root, cfg)
+            except Exception as e:  # a broken audit must neither stop runs nor let one skip the model
+                work["audit"] = [("error", "audit", repr(e))]
+            # a clean health check with nothing else to do is free: no model call, so never capped
+            if (work["health"] and not work["requests"] and not work["commits"] and reason not in ("manual", "setup")
+                    and not work["audit"]):
+                (st / "last_health").write_text(str(_now()))
+                (st / "last_health_head").write_text(work["head"] + "\n")
+                _trace(st, reason, work["head"], "audited")
+                return 0
+            fnd = work["audit"]
             # --- daily cap check (manual and setup runs ignore it) ---
             cap = None if reason in ("manual", "setup") else cap_hit(st, cfg)
             if cap:
                 _report(st, reason, work, [], [], f"Daily cap reached: {cap}; run `libraryan run` to override.")
-                _trace(st, reason, work["head"], "capped", cap=cap)
+                _trace(st, reason, work["head"], "capped", cap=cap, findings=fnd)
                 return 0
             snap = _snapshot(root, cfg)
             staged_before, dirty_before = _staged(root), set(_baseline(root))
@@ -379,7 +395,7 @@ def run(root: Path, cfg: dict, reason: str, extra_paths=()) -> int:
                     problems += rp
                 if not _on_default(root, cfg):  # another agent switched branch during the run
                     _restore(root, snap, diff, to_head=True)
-                    _trace(st, reason, work["head"], "deferred", calls, changed, deleted, problems)
+                    _trace(st, reason, work["head"], "deferred", calls, changed, deleted, problems, findings=fnd)
                     return 0
                 # ponytail: also trips on another agent's concurrent code edits; a false failure beats a silent
                 # stray edit. Those paths are reported, never restored (they may be someone's work).
@@ -399,7 +415,7 @@ def run(root: Path, cfg: dict, reason: str, extra_paths=()) -> int:
                     _report(st, reason, work, changed, problems, output, calls, parsed["lines"])
                     if not transient:
                         (st / "last_failed").write_text(work["head"] + "\n")
-                    _trace(st, reason, work["head"], "failed", calls, changed, deleted, problems)
+                    _trace(st, reason, work["head"], "failed", calls, changed, deleted, problems, findings=fnd)
                     return 1
             except BaseException as e:  # Ctrl-C, a crash, a failed restore: leave no half-done run behind
                 try:
@@ -408,11 +424,11 @@ def run(root: Path, cfg: dict, reason: str, extra_paths=()) -> int:
                 finally:
                     _report(st, reason, work, [], [f"run aborted: {e!r}"], output, calls)
                     (st / "last_failed").write_text(work["head"] + "\n")
-                    _trace(st, reason, work["head"], "aborted", calls, problems=[repr(e)])
+                    _trace(st, reason, work["head"], "aborted", calls, problems=[repr(e)], findings=fnd)
                 raise
             _report(st, reason, work, changed, problems, output, calls, parsed["lines"])
             _trace(st, reason, work["head"], "committed" if changed else "nothing_changed", calls, changed, deleted,
-                   commit=gitutil.head(root) if changed else None)
+                   commit=gitutil.head(root) if changed else None, findings=fnd)
             (st / "last_processed").write_text(work["head"] + "\n")  # commits made during the run stay new work
             (st / "last_failed").unlink(missing_ok=True)
             if work["health"]:

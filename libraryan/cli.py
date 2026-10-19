@@ -5,7 +5,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import cchooks, checks, config, gitutil, install, precommit, runner, trace
+from . import audit, cchooks, checks, config, gitutil, install, precommit, runner, trace
 from .paths import is_protected, is_request
 
 def _precommit() -> int:
@@ -77,6 +77,10 @@ def main(argv: list[str]) -> int:
         for p in problems:
             print(p)
         return 1 if problems else 0
+    if cmd == "audit":
+        root = gitutil.repo_root(Path.cwd())
+        print(audit.format(audit.run(root, config.load(root)), cap=10**6))
+        return 0
     if cmd == "upgrade":  # run the source checkout's own installer so new install logic applies
         root = gitutil.repo_root(Path.cwd())
         source = config.load(root).get("source_path")
@@ -86,6 +90,6 @@ def main(argv: list[str]) -> int:
         return subprocess.run([sys.executable, str(Path(source) / "libraryan.py"), "upgrade"], cwd=root).returncode
     if cmd == "uninstall":
         return install.uninstall(gitutil.repo_root(Path.cwd()))
-    print("usage: libraryan <run|wait|precommit|postcommit|check|stats|guard|ensure-hooks|upgrade|uninstall>",
+    print("usage: libraryan <run|wait|precommit|postcommit|check|audit|stats|guard|ensure-hooks|upgrade|uninstall>",
           file=sys.stderr)
     return 2
