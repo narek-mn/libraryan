@@ -219,3 +219,81 @@ def test_non_ascii_note_committed(repo, monkeypatch):
     monkeypatch.setenv("FAKE_CLAUDE_MODE", "unicode")
     assert runner.run(repo, cfg, "manual") == 0
     assert "docs/kb/գիտելիք.md" in head_files(repo)
+
+
+def commit_request(repo):
+    add_request(repo)
+    git(repo, "add", ".libraryan/requests")
+    git(repo, "commit", "-m", "request")
+
+
+def test_git_rm_request_deletion_committed(repo, monkeypatch):
+    cfg = make_kb(repo)
+    commit_request(repo)
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "gitrm")
+    assert runner.run(repo, cfg, "manual") == 0
+    assert ".libraryan/requests/20261019-120000-x.md" not in head_files(repo)
+    assert git(repo, "status", "--porcelain") == ""
+
+
+def test_git_mv_commits_both_sides(repo, monkeypatch):
+    cfg = make_kb(repo)
+    (repo / "docs/a.md").write_text("---\ntitle: a\ntype: note\nupdated: 2026-10-19\nsources: [x]\n---\nA\n")
+    git(repo, "add", "docs/a.md")
+    git(repo, "commit", "-m", "a", env={"LIBRARYAN": "1"})
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "gitmv")
+    assert runner.run(repo, cfg, "manual") == 0
+    files = head_files(repo)
+    assert "docs/kb/a.md" in files and "docs/a.md" not in files
+    assert git(repo, "status", "--porcelain") == ""
+
+
+def test_undone_git_rm_leaves_nothing_staged(repo, monkeypatch):
+    cfg = make_kb(repo)
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "rm_restore")
+    assert runner.run(repo, cfg, "manual") == 0
+    assert "README.md" in head_files(repo)
+    assert git(repo, "status", "--porcelain", "--", "README.md") == ""
+
+
+def test_discard_drops_new_file_only(repo, monkeypatch):
+    cfg = make_kb(repo)
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "discard,discard_existing")
+    assert runner.run(repo, cfg, "manual") == 0
+    assert not (repo / "docs/kb/x.md").exists()
+    assert "docs/kb/x.md" not in head_files(repo)
+    assert "updated by fake claude" in git(repo, "show", "HEAD:docs/kb/index.md")  # existing file kept
+
+
+def test_prompt_lists_baseline_and_leaves_it_alone(repo):
+    cfg = make_kb(repo)
+    (repo / "src").mkdir()
+    (repo / "src/x.py").write_text("x = 1\n")
+    assert runner.run(repo, cfg, "manual") == 0
+    prompt = (state(repo) / "fake_claude_prompt").read_text()
+    assert "Baseline" in prompt and "- src/x.py" in prompt
+    assert (repo / "src/x.py").read_text() == "x = 1\n"
+    assert "src/x.py" not in head_files(repo)
+
+
+def test_untracked_request_is_not_work(repo):
+    cfg = make_kb(repo)
+    add_request(repo)
+    assert runner.find_work(repo, cfg, "manual")["requests"] == []
+    git(repo, "add", ".libraryan/requests")
+    assert runner.find_work(repo, cfg, "manual")["requests"] == [".libraryan/requests/20261019-120000-x.md"]
+
+
+def test_build_prompt_includes_baseline():
+    work = {"requests": [], "since": None, "commits": 0, "health": False, "baseline": ["AGENTS.md"]}
+    assert "- AGENTS.md" in runner.build_prompt("setup", work, {})
+
+
+def test_git_rm_of_staged_request(repo, monkeypatch):
+    cfg = make_kb(repo)
+    add_request(repo)
+    git(repo, "add", ".libraryan/requests")  # staged, never committed
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "gitrm")
+    assert runner.run(repo, cfg, "manual") == 0
+    assert libraryan_commits(repo) == ["docs(libraryan): manual run"]
+    assert git(repo, "status", "--porcelain") == ""
