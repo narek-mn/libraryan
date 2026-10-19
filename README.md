@@ -69,7 +69,7 @@ Daily caps: an automatic run is skipped (outcome `capped`) once the UTC day has 
 
 ## Commands
 
-Run `libraryan <cmd>` inside the project, or the vendored `python3 .libraryan/bin/libraryan <cmd>` (same commands, no global install needed):
+Run `libraryan <cmd>` inside the project. The vendored `python3 .libraryan/bin/libraryan <cmd>` runs the same commands without the global tool, except `init` (global command only) and `upgrade` (hands off to the global command):
 
 | Command | Does |
 |---|---|
@@ -91,6 +91,9 @@ Internal (called by hooks/cron): `precommit`, `postcommit`, `guard`, `ensure-hoo
 pipx upgrade libraryan
 libraryan upgrade        # in each project; commits the refreshed vendored copy
 ```
+
+From a pre-0.2 source-checkout install: `pipx install libraryan`, then run `libraryan upgrade` in the project.
+`upgrade` refuses to replace a project installed by a newer version; run `pipx upgrade libraryan` first.
 
 The project's git hooks, Claude Code hooks and cron job use the vendored copy in `.libraryan/`, so teammates do not need the tool installed unless they run commands themselves.
 
@@ -120,6 +123,7 @@ The project's git hooks, Claude Code hooks and cron job use the vendored copy in
 | `owned` / `excluded` | see `config.py` | Globs Libraryan owns / ignores |
 | `exempt` | `[]` | Owned-looking paths people may still edit |
 | `chain_hooks_path` | detected | Pre-existing hooks dir to chain to |
+| `installed_version` | set by init/upgrade | Libraryan version that last wrote the vendored copy |
 
 ## Reports
 
@@ -140,6 +144,7 @@ Every run, including skipped ones, also appends a line to `.libraryan/state/runs
 - `LIBRARYAN=1` in the environment bypasses the lock; any process can set it. The upgrade path is a CI check.
 - `git commit --no-verify` skips the pre-commit hook and bypasses the lock the same way.
 - A non-Claude agent (no guard hook) that edits an owned doc while a run is in progress can have that edit committed as Libraryan's.
+- Hooks and cron run `python3` from PATH and need Python >= 3.10 (macOS's `/usr/bin/python3` may be older).
 - Cron runs without your shell profile: make sure `claude` works non-interactively from cron (auth stored, not on a PATH that only nvm or your profile sets up).
 - A run fails (and is retried on the next trigger) when another agent edits code while Libraryan runs.
 - Requests from teammates that arrive by `git pull` wait for your next local commit or the 03:00 run.

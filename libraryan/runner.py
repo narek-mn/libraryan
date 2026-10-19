@@ -1,4 +1,5 @@
 import fcntl
+import itertools
 import json
 import os
 import posixpath
@@ -274,7 +275,14 @@ def _report(st: Path, reason: str, work: dict, changed: list[str], problems: lis
         lines += [f"- Cost: ${cost:.2f} ({sum(c.get('turns') or 0 for c in calls)} turns)", ""]
     lines += ["## Deletion ledger", "", *(ledger_lines or ["none"]), "", "## Model output", "", output.strip(), ""]
     text = "\n".join(lines)
-    (st / "reports" / time.strftime("%Y%m%dT%H%M%SZ.md", time.gmtime(_now()))).write_text(text)
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(_now()))
+    for n in itertools.count():  # several reports in one second: keep each, never overwrite
+        try:
+            with open(st / "reports" / f"{stamp}{f'-{n}' if n else ''}.md", "x") as f:
+                f.write(text)
+            break
+        except FileExistsError:
+            pass
     if latest:
         (st / "reports/latest.md").write_text(text)
 

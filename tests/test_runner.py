@@ -378,10 +378,19 @@ def test_other_agents_staged_new_request_stays_staged(repo, monkeypatch):
 
 
 def _alive(pid):
+    """Portable (no /proc): signal 0 probes the pid. A zombie still answers until reaped; reap it if ours."""
     try:
-        return Path(f"/proc/{pid}/stat").read_text().split(")")[-1].split()[0] != "Z"
-    except FileNotFoundError:
+        if os.waitpid(pid, os.WNOHANG)[0] == pid:
+            return False
+    except ChildProcessError:  # not our child: its new parent (init) reaps it
+        pass
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
         return False
+    except PermissionError:  # exists, owned by someone else (pid reused)
+        return True
+    return True
 
 
 def test_timeout_kills_process_group(repo, monkeypatch):
@@ -967,3 +976,15 @@ def test_transient_failures_count_toward_total_streak(repo):
     assert runner.cap_hit(state(repo), cfg) == "max_consecutive_failures"
     cfg["max_consecutive_failures"] = 99
     assert runner.cap_hit(state(repo), cfg) == "max_consecutive_transient_failures"
+
+
+def test_reports_in_the_same_second_both_kept(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner, "_now", lambda: 1_800_000_000.0)
+    st = runner._state(tmp_path)
+    work = {"requests": [], "since": None, "commits": 0, "health": False}
+    for out in ("first", "second", "third"):
+        runner._report(st, "manual", work, [], [], out)
+    archived = sorted(p.name for p in (st / "reports").iterdir() if p.name != "latest.md")
+    assert len(archived) == 3
+    assert sorted("first" in (st / "reports" / n).read_text() for n in archived) == [False, False, True]
+    assert all(n.endswith(".md") for n in archived)

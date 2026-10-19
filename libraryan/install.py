@@ -5,11 +5,12 @@ import os
 import re
 import shutil
 import socket
+import stat
 import subprocess
 import sys
 from pathlib import Path
 
-from . import config, gitutil, precommit, runner
+from . import __version__, config, gitutil, precommit, runner
 from .paths import is_protected
 
 PKG = Path(__file__).resolve().parent  # the package, with its data in _runtime/ and _templates/
@@ -73,9 +74,12 @@ def _copy(project: Path, source: Path) -> None:
     """Vendored package, runtime and templates: everything upgrade refreshes. `source` is the package dir."""
     lib = project / ".libraryan"
     for name, src in (("libraryan", ""), ("bin", "_runtime/bin"), ("hooks", "_runtime/hooks")):
-        shutil.rmtree(lib / name, ignore_errors=True)
+        if (lib / name).exists():
+            shutil.rmtree(lib / name)
         shutil.copytree(source / src, lib / name,
                         ignore=shutil.ignore_patterns("__pycache__", "_runtime", "_templates"))
+        for p in [lib / name, *(lib / name).rglob("*")]:  # a read-only package (e.g. Nix) must not block upgrades
+            p.chmod(p.stat().st_mode | stat.S_IWUSR)
     for f in [*(lib / "bin").iterdir(), *(lib / "hooks").iterdir()]:
         f.chmod(0o755)  # explicit: a wheel install may not keep the executable bit
     for src, dest in (("agents/libraryan.md", ".claude/agents/libraryan.md"),
@@ -185,7 +189,7 @@ def init(project: Path, source: Path = PKG, run_setup: bool = True) -> int:
     if not settings.exists():
         cfg["created_settings"] = True
     cfg.update(default_branch=branch, runner_host=socket.gethostname(), claude_bin=claude or "claude",
-               claude_md_symlink=linked)
+               claude_md_symlink=linked, installed_version=__version__)
     config.save(project, cfg)
     settings.write_text(json.dumps(merge_settings(old), indent=2) + "\n")
     text = agents.read_text() if agents.exists() else ""
@@ -214,12 +218,29 @@ def init(project: Path, source: Path = PKG, run_setup: bool = True) -> int:
     return code
 
 
+def _version(v: str) -> tuple:
+    try:
+        return tuple(int(x) for x in v.split("."))
+    except (AttributeError, ValueError):  # missing or non-numeric: never block on it
+        return ()
+
+
 def upgrade(project: Path, source: Path = PKG) -> int:
     project = Path(project)
+    if not (project / config.CONFIG_PATH).is_file():
+        print("libraryan: not installed here; run: libraryan init", file=sys.stderr)
+        return 1
     cfg = config.load(project)
+    have = cfg.get("installed_version")
+    if _version(have) > _version(__version__):
+        print(f"libraryan: this project has Libraryan {have}, newer than {__version__}; "
+              "run `pipx upgrade libraryan` first", file=sys.stderr)
+        return 1
     if _dirty(project, cfg):
         return 1
     _copy(project, Path(source))
+    cfg.pop("source_path", None)  # pre-0.2 key: an absolute path on someone's machine
+    cfg["installed_version"] = __version__
     config.save(project, cfg)  # adds keys new in DEFAULTS, keeps existing values
     return _commit(project, "upgrade", cfg)
 

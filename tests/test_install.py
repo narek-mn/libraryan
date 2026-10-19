@@ -474,3 +474,64 @@ def test_init_announces_setup(repo, monkeypatch, capsys):
     install.init(repo, SRC)
     assert ("Setup running (can take up to 120 minutes); report: .libraryan/state/reports/latest.md"
             in capsys.readouterr().out)
+
+
+def test_upgrade_refuses_without_install(repo, capsys):
+    head = git(repo, "rev-parse", "HEAD").stdout
+    assert install.upgrade(repo) == 1
+    assert "libraryan: not installed here; run: libraryan init" in capsys.readouterr().err
+    assert not (repo / ".libraryan").exists() and not (repo / ".claude").exists()
+    assert git(repo, "rev-parse", "HEAD").stdout == head
+
+
+def test_upgrade_drops_source_path(repo):
+    install.init(repo, SRC, run_setup=False)
+    cfg = json.loads((repo / ".libraryan/config.json").read_text())
+    cfg["source_path"] = "/old/checkout"
+    (repo / ".libraryan/config.json").write_text(json.dumps(cfg))
+    git(repo, "commit", "-qam", "old install", env={"LIBRARYAN": "1"})
+    assert install.upgrade(repo) == 0
+    assert "source_path" not in json.loads((repo / ".libraryan/config.json").read_text())
+
+
+def test_init_and_upgrade_record_version(repo):
+    install.init(repo, SRC, run_setup=False)
+    assert config.load(repo)["installed_version"] == __version__
+    cfg = json.loads((repo / ".libraryan/config.json").read_text())
+    cfg["installed_version"] = "0.1.0"
+    (repo / ".libraryan/config.json").write_text(json.dumps(cfg))
+    git(repo, "commit", "-qam", "older", env={"LIBRARYAN": "1"})
+    assert install.upgrade(repo) == 0
+    assert config.load(repo)["installed_version"] == __version__
+
+
+def test_upgrade_refuses_downgrade(repo, capsys):
+    install.init(repo, SRC, run_setup=False)
+    cfg = json.loads((repo / ".libraryan/config.json").read_text())
+    cfg["installed_version"] = "99.0.0"
+    (repo / ".libraryan/config.json").write_text(json.dumps(cfg))
+    git(repo, "commit", "-qam", "newer", env={"LIBRARYAN": "1"})
+    head = git(repo, "rev-parse", "HEAD").stdout
+    assert install.upgrade(repo) == 1
+    assert "pipx upgrade libraryan" in capsys.readouterr().err
+    assert git(repo, "rev-parse", "HEAD").stdout == head
+
+
+def test_upgrade_from_read_only_package(repo, tmp_path_factory):
+    import shutil
+    import stat
+    ro = tmp_path_factory.mktemp("ro") / "libraryan"
+    shutil.copytree(SRC, ro, ignore=shutil.ignore_patterns("__pycache__"))
+    paths = [ro, *ro.rglob("*")]
+    for p in paths:
+        p.chmod(p.stat().st_mode & ~(stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH))
+    try:
+        assert install.init(repo, ro, run_setup=False) == 0
+        (repo / ".libraryan/libraryan/gone.py").write_text("# stale\n")
+        git(repo, "add", "-A")
+        git(repo, "commit", "-qm", "stale", env={"LIBRARYAN": "1"})
+        assert install.upgrade(repo, ro) == 0
+        assert not (repo / ".libraryan/libraryan/gone.py").exists()
+    finally:
+        for p in paths:
+            p.chmod(p.stat().st_mode | stat.S_IWUSR)
