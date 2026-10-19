@@ -1,4 +1,5 @@
 import fcntl
+import json
 import os
 import subprocess
 import time
@@ -35,6 +36,10 @@ def state(repo):
 def add_request(repo):
     (repo / ".libraryan/requests").mkdir(exist_ok=True)
     (repo / ".libraryan/requests/20261019-120000-x.md").write_text("we chose sqlite\n")
+
+
+def last_trace(repo):
+    return [json.loads(l) for l in (state(repo) / "runs.jsonl").read_text().splitlines()][-1]
 
 
 def libraryan_commits(repo):
@@ -81,7 +86,7 @@ def test_run_deferred_off_default_branch(repo):
     git(repo, "checkout", "-q", "-b", "feature")
     add_request(repo)
     assert runner.run(repo, cfg, "manual") == 0
-    assert "deferred" in (state(repo) / "runs.log").read_text()
+    assert last_trace(repo)["outcome"] == "deferred"
     assert not (state(repo) / "fake_claude_ran").exists()
 
 
@@ -202,7 +207,7 @@ def test_branch_switch_during_run_defers(repo, monkeypatch):
     assert runner.run(repo, cfg, "manual") == 0
     assert libraryan_commits(repo) == []
     assert git(repo, "status", "--porcelain") == ""
-    assert "deferred" in (state(repo) / "runs.log").read_text()
+    assert last_trace(repo)["outcome"] == "deferred"
 
 
 def test_model_timeout_fails_run(repo, monkeypatch):
@@ -389,7 +394,7 @@ def test_timeout_kills_process_group(repo, monkeypatch):
 def test_setup_uses_setup_timeout(repo, monkeypatch):
     cfg = make_kb(repo)
     seen = []
-    monkeypatch.setattr(runner, "_call_model", lambda cmd, root, timeout: seen.append(timeout) or ("", []))
+    monkeypatch.setattr(runner, "_call_model", lambda cmd, root, timeout: seen.append(timeout) or ("", [], {}))
     runner.run(repo, cfg, "setup")
     add_request(repo)
     git(repo, "add", ".libraryan/requests")
@@ -462,3 +467,62 @@ def test_daily_health_skipped_on_idle_repo(repo):
     (state(repo) / "fake_claude_ran").unlink()
     assert runner.run(repo, cfg, "daily") == 0
     assert not (state(repo) / "fake_claude_ran").exists()
+
+
+def test_trace_written_for_noop(repo):
+    cfg = make_kb(repo)
+    state(repo).mkdir()
+    (state(repo) / "last_processed").write_text(git(repo, "rev-parse", "HEAD"))
+    (state(repo) / "last_health").write_text(str(time.time()))
+    runner.run(repo, cfg, "manual")
+    t = last_trace(repo)
+    assert t["outcome"] == "noop" and t["calls"] == [] and t["reason"] == "manual"
+
+
+def test_trace_written_for_committed_run(repo):
+    cfg = make_kb(repo)
+    add_request(repo)
+    runner.run(repo, cfg, "manual")
+    t = last_trace(repo)
+    assert t["outcome"] == "committed" and t["calls"][0]["role"] == "author"
+    assert t["calls"][0]["cost_usd"] == 0.01 and t["commit"] == git(repo, "rev-parse", "HEAD").strip()
+    assert t["changed"] >= 1 and t["problems"] == 0 and t["cap"] is None
+    assert "- Cost: $0.01 (3 turns)" in (state(repo) / "reports/latest.md").read_text()
+    assert not (state(repo) / "runs.log").exists()
+
+
+def test_trace_deferred(repo):
+    cfg = make_kb(repo)
+    git(repo, "checkout", "-q", "-b", "feature")
+    add_request(repo)
+    runner.run(repo, cfg, "manual")
+    assert [last_trace(repo)["outcome"], last_trace(repo)["calls"]] == ["deferred", []]
+
+
+def test_trace_failed_and_aborted(repo, monkeypatch):
+    cfg = make_kb(repo)
+    add_request(repo)
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "badnote")
+    assert runner.run(repo, cfg, "manual") == 1
+    t = last_trace(repo)
+    assert t["outcome"] == "failed" and t["problems"] >= 1 and t["commit"] is None
+
+    def boom(cmd, root, timeout):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(runner, "_call_model", boom)
+    try:
+        runner.run(repo, cfg, "manual")
+    except KeyboardInterrupt:
+        pass
+    assert last_trace(repo)["outcome"] == "aborted"
+
+
+def test_nojson_output_still_works(repo, monkeypatch):
+    cfg = make_kb(repo)
+    add_request(repo)
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "nojson")
+    assert runner.run(repo, cfg, "manual") == 0
+    t = last_trace(repo)
+    assert t["outcome"] == "committed" and "cost_usd" not in t["calls"][0]
+    assert "SUMMARY ok" in git(repo, "log", "-1", "--format=%b")

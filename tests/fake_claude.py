@@ -2,6 +2,7 @@
 """Stand-in for `claude` in runner tests: edits the KB and prints a summary.
 
 FAKE_CLAUDE_MODE (comma-separated) adds misbehaviour/races for specific tests."""
+import json
 import os
 import subprocess
 import sys
@@ -60,6 +61,9 @@ if "discard" in modes:  # reviewer rejected a new note
     discard.append("docs/kb/x.md")
 if "discard_existing" in modes:
     discard.append("docs/kb/index.md")
-print("SUMMARY ok")
-for p in discard:
-    print(f"Discard: {p}")
+text = "SUMMARY ok\n" + "".join(f"Discard: {p}\n" for p in discard)
+if "--output-format" in sys.argv and "nojson" not in modes:
+    print(json.dumps({"type": "result", "result": text, "total_cost_usd": 0.01, "num_turns": 3,
+                      "duration_ms": 100, "is_error": False}))
+else:
+    print(text, end="")

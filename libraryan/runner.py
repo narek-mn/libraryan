@@ -9,7 +9,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import checks, gitutil
+from . import checks, gitutil, trace
 from .paths import is_protected, is_request
 
 ALLOWED_TOOLS = ("Read,Edit,Write,Glob,Grep,Task,Agent,Bash(git log:*),Bash(git diff:*),Bash(git show:*),"
@@ -199,14 +199,15 @@ def _child_env() -> dict:
     return {**{k: v for k, v in os.environ.items() if not drop(k)}, "LIBRARYAN": "1"}
 
 
-def _call_model(cmd: list[str], root: Path, timeout: float) -> tuple[str, list[str]]:
-    """(stdout, problems); `timeout` in seconds. Runs in its own process group so a timeout or interrupt
+def _call_model(cmd: list[str], root: Path, timeout: float) -> tuple[str, list[str], dict]:
+    """(text, problems, usage); `timeout` in seconds. Runs in its own process group so a timeout or interrupt
     also kills the agent's tool subprocesses."""
+    cmd = [*cmd[:-1], "--output-format", "json", cmd[-1]]  # the prompt stays the last argument
     try:
         p = subprocess.Popen(cmd, cwd=root, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                              stderr=subprocess.PIPE, text=True, env=_child_env(), start_new_session=True)
     except OSError as e:
-        return "", [f"could not start {cmd[0]}: {e}"]
+        return "", [f"could not start {cmd[0]}: {e}"], {}
     try:
         out, _ = p.communicate(timeout=timeout)
     except BaseException as e:
@@ -216,9 +217,10 @@ def _call_model(cmd: list[str], root: Path, timeout: float) -> tuple[str, list[s
             pass
         p.communicate()
         if isinstance(e, subprocess.TimeoutExpired):
-            return "", [f"{cmd[0]} timed out after {timeout / 60:g} min"]
+            return "", [f"{cmd[0]} timed out after {timeout / 60:g} min"], {}
         raise
-    return out, [f"{cmd[0]} exited {p.returncode}"] if p.returncode else []
+    text, usage = trace.parse_output(out)
+    return text, [f"{cmd[0]} exited {p.returncode}"] if p.returncode else [], usage
 
 
 def _unstage_new(root: Path, staged_before: set[str], snap: dict) -> None:
@@ -247,7 +249,8 @@ def _commit(root: Path, paths: list[str], reason: str, output: str) -> str | Non
         _sleep(2)
 
 
-def _report(st: Path, reason: str, work: dict, changed: list[str], problems: list[str], output: str) -> None:
+def _report(st: Path, reason: str, work: dict, changed: list[str], problems: list[str], output: str,
+            calls: list[dict] = ()) -> None:
     lines = [f"# Libraryan run: {reason}", "",
              f"- Requests: {', '.join(work['requests']) or 'none'}",
              f"- Commits since {work['since'] or '(none)'}: {work['commits']}",
@@ -255,6 +258,9 @@ def _report(st: Path, reason: str, work: dict, changed: list[str], problems: lis
              "## Changed", *(f"- {p}" for p in changed or ["(nothing)"]), ""]
     if problems:
         lines += ["## Problems (changes reverted, nothing committed)", *(f"- {p}" for p in problems), ""]
+    cost = sum(c.get("cost_usd") or 0 for c in calls)
+    if cost or any("turns" in c for c in calls):
+        lines += [f"- Cost: ${cost:.2f} ({sum(c.get('turns') or 0 for c in calls)} turns)", ""]
     lines += ["## Model output", "", output.strip(), ""]
     text = "\n".join(lines)
     (st / "reports" / time.strftime("%Y%m%dT%H%M%SZ.md", time.gmtime(_now()))).write_text(text)
@@ -268,10 +274,19 @@ def _on_default(root: Path, cfg: dict) -> bool:
         return False
 
 
-def _defer(st: Path, reason: str, cfg: dict) -> None:
-    with open(st / "runs.log", "a") as log:
-        log.write(f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(_now()))} {reason}: deferred "
-                  f"(not on {cfg['default_branch']})\n")
+def _trace(st: Path, reason: str, head: str, outcome: str, calls=(), changed=(), root: Path | None = None,
+           problems=(), commit=None) -> None:
+    """The one trace record of a run() loop iteration; cap and audit_findings are filled by later features."""
+    trace.append(st, {"reason": reason, "head": head, "outcome": outcome, "calls": list(calls),
+                      "changed": len(changed), "deleted": sum(not (root / p).exists() for p in changed) if root else 0,
+                      "problems": len(problems), "commit": commit, "cap": None, "audit_findings": 0})
+
+
+def _head_or_none(root: Path) -> str | None:
+    try:
+        return gitutil.head(root)
+    except subprocess.CalledProcessError:  # no commits yet
+        return None
 
 
 def run(root: Path, cfg: dict, reason: str, extra_paths=()) -> int:
@@ -284,13 +299,14 @@ def run(root: Path, cfg: dict, reason: str, extra_paths=()) -> int:
         while True:
             (st / "rerun").unlink(missing_ok=True)
             if not _on_default(root, cfg):
-                _defer(st, reason, cfg)
+                _trace(st, reason, _head_or_none(root), "deferred")
                 return 0
             if (reason != "setup" and not (root / cfg["kb_root"].strip("/") / "index.md").exists()
                     and not _backed_off(st, reason, gitutil.head(root))):
                 reason = "setup"  # no knowledge base yet (e.g. the setup run failed or was interrupted)
             work = find_work(root, cfg, reason)
             if not (work["requests"] or work["commits"] or work["health"] or reason == "setup"):
+                _trace(st, reason, work["head"], "noop")
                 return 0
             snap = _snapshot(root, cfg)
             staged_before, dirty_before = _staged(root), set(_baseline(root))
@@ -302,9 +318,10 @@ def run(root: Path, cfg: dict, reason: str, extra_paths=()) -> int:
             if cfg["model"]:
                 cmd += ["--model", cfg["model"]]
             timeout = cfg["setup_timeout_minutes" if reason == "setup" else "run_timeout_minutes"] * 60
-            output = ""
+            output, calls = "", []
             try:
-                output, problems = _call_model([*cmd, build_prompt(reason, work, cfg)], root, timeout)
+                output, problems, usage = _call_model([*cmd, build_prompt(reason, work, cfg)], root, timeout)
+                calls.append({"role": "author", **usage})
                 # undo all staging done during the run (the agent's git rm/mv, or a stray `git rm` of code) so the
                 # index is as before; Libraryan's changes are then taken from the working tree like any edit
                 _unstage_new(root, staged_before, snap)
@@ -323,7 +340,7 @@ def run(root: Path, cfg: dict, reason: str, extra_paths=()) -> int:
                 problems += checks.run_all(root, cfg, [p for p in changed if p.endswith(".md")])
                 if not _on_default(root, cfg):  # another agent switched branch during the run
                     _restore(root, snap, diff, to_head=True)
-                    _defer(st, reason, cfg)
+                    _trace(st, reason, work["head"], "deferred", calls, changed, root, problems)
                     return 0
                 # ponytail: also trips on another agent's concurrent code edits; a false failure beats a silent
                 # stray edit. Those paths are reported, never restored (they may be someone's work).
@@ -339,19 +356,23 @@ def run(root: Path, cfg: dict, reason: str, extra_paths=()) -> int:
                         problems.append(err)
                 if problems:
                     _restore(root, snap, diff)
-                    _report(st, reason, work, changed, problems, output)
+                    _report(st, reason, work, changed, problems, output, calls)
                     if not transient:
                         (st / "last_failed").write_text(work["head"] + "\n")
+                    _trace(st, reason, work["head"], "failed", calls, changed, root, problems)
                     return 1
             except BaseException as e:  # Ctrl-C, a crash, a failed restore: leave no half-done run behind
                 try:
                     _unstage_new(root, staged_before, snap)
                     _restore(root, snap, _libraryan_changes(snap, _snapshot(root, cfg)))
                 finally:
-                    _report(st, reason, work, [], [f"run aborted: {e!r}"], output)
+                    _report(st, reason, work, [], [f"run aborted: {e!r}"], output, calls)
                     (st / "last_failed").write_text(work["head"] + "\n")
+                    _trace(st, reason, work["head"], "aborted", calls, problems=[repr(e)])
                 raise
-            _report(st, reason, work, changed, problems, output)
+            _report(st, reason, work, changed, problems, output, calls)
+            _trace(st, reason, work["head"], "committed" if changed else "nothing_changed", calls, changed, root,
+                   commit=gitutil.head(root) if changed else None)
             (st / "last_processed").write_text(work["head"] + "\n")  # commits made during the run stay new work
             (st / "last_failed").unlink(missing_ok=True)
             if work["health"]:

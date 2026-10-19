@@ -5,7 +5,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import cchooks, checks, config, gitutil, install, precommit, runner
+from . import cchooks, checks, config, gitutil, install, precommit, runner, trace
 from .paths import is_protected, is_request
 
 def _precommit() -> int:
@@ -55,6 +55,11 @@ def main(argv: list[str]) -> int:
         ap.add_argument("--reason", default="manual")
         root = gitutil.repo_root(Path.cwd())
         return runner.run(root, config.load(root), ap.parse_args(argv[1:]).reason)
+    if cmd == "stats":
+        ap = argparse.ArgumentParser(prog="libraryan stats")
+        ap.add_argument("--days", type=int, default=7)
+        print(trace.stats(runner._state(gitutil.repo_root(Path.cwd())), ap.parse_args(argv[1:]).days))
+        return 0
     if cmd == "wait":
         root = gitutil.repo_root(Path.cwd())
         runner.wait(root, config.load(root))
@@ -81,6 +86,6 @@ def main(argv: list[str]) -> int:
         return subprocess.run([sys.executable, str(Path(source) / "libraryan.py"), "upgrade"], cwd=root).returncode
     if cmd == "uninstall":
         return install.uninstall(gitutil.repo_root(Path.cwd()))
-    print("usage: libraryan <run|wait|precommit|postcommit|check|guard|ensure-hooks|upgrade|uninstall>",
+    print("usage: libraryan <run|wait|precommit|postcommit|check|stats|guard|ensure-hooks|upgrade|uninstall>",
           file=sys.stderr)
     return 2
