@@ -41,6 +41,16 @@ if "rm_restore" in modes:  # deletion undone after a reviewer rejection
     text = Path("README.md").read_text()
     subprocess.run(["git", "rm", "-q", "--", "README.md"], check=True)
     Path("README.md").write_text(text)
+if "codeedit" in modes:  # the agent strays into code
+    Path("app.py").write_text("x = 2\n")
+    subprocess.run(["git", "rm", "-q", "--", "util.py"], check=True)
+if "env" in modes:
+    Path(".libraryan/state/fake_claude_env").write_text("\n".join(sorted(os.environ)))
+if "spawn" in modes:  # a tool subprocess that outlives a killed parent unless the group is killed
+    child = subprocess.Popen(["sleep", "30"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL)
+    Path(".libraryan/state/fake_claude_child").write_text(str(child.pid))
+    time.sleep(30)
 discard = []
 if "discard" in modes:  # reviewer rejected a new note
     Path("docs/kb/x.md").write_text("rejected\n")

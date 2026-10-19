@@ -428,3 +428,10 @@ def test_global_hooks_path_ignored(repo, tmp_path, monkeypatch):
     assert config.load(repo)["chain_hooks_path"] is None
     install.uninstall(repo)
     assert git(repo, "config", "--local", "core.hooksPath", check=False).stdout == ""
+
+
+def test_init_announces_setup(repo, monkeypatch, capsys):
+    monkeypatch.setattr(install.shutil, "which", lambda name: "/nonexistent/claude" if name == "claude" else None)
+    install.init(repo, SRC)
+    assert ("Setup running (can take up to 120 minutes); report: .libraryan/state/reports/latest.md"
+            in capsys.readouterr().out)

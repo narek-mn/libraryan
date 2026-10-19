@@ -48,3 +48,12 @@ def test_ensure_hooks_sets_path(repo):
 def test_ensure_hooks_noop_without_hooks_dir(repo):
     cchooks.ensure_hooks(repo)
     assert subprocess.run(["git", "config", "core.hooksPath"], cwd=repo, capture_output=True).returncode == 1
+
+
+def test_guard_confines_libraryan_run(repo, tmp_path_factory):
+    env = {"LIBRARYAN": "1"}
+    for p in (repo / "src" / "a.py", repo / ".libraryan" / "config.json",
+              repo / ".libraryan" / "requests" / "r.md", tmp_path_factory.mktemp("o") / "a.md"):
+        assert cchooks.guard(_payload(p), repo, config.DEFAULTS, env)[0] == 2, p
+    assert cchooks.guard(_payload(repo / "docs" / "a.md", "Edit"), repo, config.DEFAULTS, env) == (0, "")
+    assert cchooks.guard(_payload(repo / "src" / "a.py", "Bash"), repo, config.DEFAULTS, env) == (0, "")

@@ -2,6 +2,7 @@ import fcntl
 import os
 import posixpath
 import re
+import signal
 import socket
 import subprocess
 import sys
@@ -181,6 +182,40 @@ def _restore(root: Path, snap: dict, paths: list[str], to_head=False) -> None:
                                          capture_output=True, check=True).stdout)
 
 
+def _child_env() -> dict:
+    """Not the calling Claude Code session's (nested-session markers) nor a git hook's (temporary index)."""
+    return {**{k: v for k, v in os.environ.items()
+               if k != "CLAUDECODE" and not k.startswith(("CLAUDE_CODE_", "GIT_"))}, "LIBRARYAN": "1"}
+
+
+def _call_model(cmd: list[str], root: Path, timeout: float) -> tuple[str, list[str]]:
+    """(stdout, problems); `timeout` in seconds. Runs in its own process group so a timeout or interrupt
+    also kills the agent's tool subprocesses."""
+    try:
+        p = subprocess.Popen(cmd, cwd=root, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE, text=True, env=_child_env(), start_new_session=True)
+    except OSError as e:
+        return "", [f"could not start {cmd[0]}: {e}"]
+    try:
+        out, _ = p.communicate(timeout=timeout)
+    except BaseException as e:
+        try:
+            os.killpg(p.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        p.communicate()
+        if isinstance(e, subprocess.TimeoutExpired):
+            return "", [f"{cmd[0]} timed out after {timeout / 60:g} min"]
+        raise
+    return out, [f"{cmd[0]} exited {p.returncode}"] if p.returncode else []
+
+
+def _unstage_new(root: Path, staged_before: set[str]) -> None:
+    new = sorted(_staged(root) - staged_before)
+    if new:
+        gitutil.git(root, "reset", "-q", "--", *new, check=False)
+
+
 def _commit(root: Path, paths: list[str], reason: str, output: str) -> str | None:
     """Commit only `paths`; returns an error message on failure."""
     env = {**os.environ, "LIBRARYAN": "1"}
@@ -243,55 +278,60 @@ def run(root: Path, cfg: dict, reason: str, extra_paths=()) -> int:
             if not (work["requests"] or work["commits"] or work["health"] or reason == "setup"):
                 return 0
             snap = _snapshot(root, cfg)
-            staged_before = _staged(root)
+            staged_before, dirty_before = _staged(root), set(_baseline(root))
             # installer files (already committed by the installer) are listed on their own, never baseline
-            work["baseline"] = sorted(set(_baseline(root)) - set(work["requests"]) - set(extra_paths))
+            work["baseline"] = sorted(dirty_before - set(work["requests"]) - set(extra_paths))
             work["extra"] = sorted(extra_paths)
             cmd = [cfg["claude_bin"], "-p", "--agent", "libraryan", "--permission-mode", "acceptEdits",
                    "--allowedTools", ALLOWED_TOOLS]
             if cfg["model"]:
                 cmd += ["--model", cfg["model"]]
+            timeout = cfg["setup_timeout_minutes" if reason == "setup" else "run_timeout_minutes"] * 60
+            output = ""
             try:
-                r = subprocess.run([*cmd, build_prompt(reason, work, cfg)], cwd=root, capture_output=True,
-                                   text=True, env={**os.environ, "LIBRARYAN": "1"},
-                                   timeout=cfg["run_timeout_minutes"] * 60)
-                output, problems = r.stdout, [f"{cfg['claude_bin']} exited {r.returncode}"] if r.returncode else []
-            except subprocess.TimeoutExpired:
-                output, problems = "", [f"{cfg['claude_bin']} timed out after {cfg['run_timeout_minutes']} min"]
-            except OSError as e:
-                output, problems = "", [f"could not start {cfg['claude_bin']}: {e}"]
-            # undo the agent's git rm/mv staging (only on its paths) so the index is as before the run;
-            # its changes are then taken from the working tree like any edit
-            unstage = [p for p in _staged(root) - staged_before
-                       if is_protected(p, cfg) or (is_request(p) and p in snap)]
-            if unstage:
-                gitutil.git(root, "reset", "-q", "--", *unstage, check=False)
-            after = _snapshot(root, cfg)
-            diff = _libraryan_changes(snap, after)
-            for p in re.findall(r"^Discard: `?(.+?)`?\s*$", output, re.M):  # rejected new files only
-                if p in diff and snap.get(p) is None:
-                    (root / p).unlink(missing_ok=True)
-                    diff.remove(p)
-            tracked = set(_ls_files(root))
-            # deletions count only for paths HEAD has (a deleted never-committed file needs no commit)
-            in_head = set(_z(root, "ls-tree", "-r", "--name-only", "HEAD", "--", *diff)) if diff else set()
-            baseline = set(work["baseline"])  # another agent's work in progress is never committed
-            changed = [p for p in diff
-                       if (p in tracked or (root / p).exists() or p in in_head) and p not in baseline]
-            problems += checks.run_all(root, cfg, [p for p in changed if p.endswith(".md")])
-            if not _on_default(root, cfg):  # another agent switched branch during the run
-                _restore(root, snap, diff, to_head=True)
-                _defer(st, reason, cfg)
-                return 0
-            if changed and not problems:
-                err = _commit(root, changed, reason, output)
-                if err:
-                    gitutil.git(root, "reset", "-q", "--", *changed, check=False)
-                    problems.append(err)
-            if problems:
-                _restore(root, snap, diff)
-                _report(st, reason, work, changed, problems, output)
-                return 1
+                output, problems = _call_model([*cmd, build_prompt(reason, work, cfg)], root, timeout)
+                # undo all staging done during the run (the agent's git rm/mv, or a stray `git rm` of code) so the
+                # index is as before; Libraryan's changes are then taken from the working tree like any edit
+                _unstage_new(root, staged_before)
+                after = _snapshot(root, cfg)
+                diff = _libraryan_changes(snap, after)
+                for p in re.findall(r"^Discard: `?(.+?)`?\s*$", output, re.M):  # rejected new files only
+                    if p in diff and snap.get(p) is None:
+                        (root / p).unlink(missing_ok=True)
+                        diff.remove(p)
+                tracked = set(_ls_files(root))
+                # deletions count only for paths HEAD has (a deleted never-committed file needs no commit)
+                in_head = set(_z(root, "ls-tree", "-r", "--name-only", "HEAD", "--", *diff)) if diff else set()
+                baseline = set(work["baseline"])  # another agent's work in progress is never committed
+                changed = [p for p in diff
+                           if (p in tracked or (root / p).exists() or p in in_head) and p not in baseline]
+                problems += checks.run_all(root, cfg, [p for p in changed if p.endswith(".md")])
+                if not _on_default(root, cfg):  # another agent switched branch during the run
+                    _restore(root, snap, diff, to_head=True)
+                    _defer(st, reason, cfg)
+                    return 0
+                # ponytail: also trips on another agent's concurrent code edits; a false failure beats a silent
+                # stray edit. Those paths are reported, never restored (they may be someone's work).
+                foreign = sorted(p for p in set(_baseline(root)) - dirty_before - set(diff)
+                                 if not is_request(p) and not p.startswith(STATE + "/"))
+                if foreign:
+                    problems.append(f"non-owned paths changed: {', '.join(foreign)}")
+                if changed and not problems:
+                    err = _commit(root, changed, reason, output)
+                    if err:
+                        gitutil.git(root, "reset", "-q", "--", *changed, check=False)
+                        problems.append(err)
+                if problems:
+                    _restore(root, snap, diff)
+                    _report(st, reason, work, changed, problems, output)
+                    return 1
+            except BaseException as e:  # Ctrl-C, a crash, a failed restore: leave no half-done run behind
+                try:
+                    _unstage_new(root, staged_before)
+                    _restore(root, snap, _libraryan_changes(snap, _snapshot(root, cfg)))
+                finally:
+                    _report(st, reason, work, [], [f"run aborted: {e!r}"], output)
+                raise
             _report(st, reason, work, changed, problems, output)
             (st / "last_processed").write_text(work["head"] + "\n")  # commits made during the run stay new work
             if work["health"]:

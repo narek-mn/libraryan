@@ -203,7 +203,10 @@ def init(project: Path, source: Path, run_setup: bool = True) -> int:
     _crontab(project, f"0 3 * * * cd '{project}' && python3 {MARK} run --reason daily")
     if not run_setup:
         return 0
-    code = runner.run(project, config.load(project), "setup", extra_paths=_files(project))
+    cfg = config.load(project)
+    print(f"Setup running (can take up to {cfg['setup_timeout_minutes']} minutes); "
+          "report: .libraryan/state/reports/latest.md", flush=True)
+    code = runner.run(project, cfg, "setup", extra_paths=_files(project))
     if code:
         print("libraryan: installed, but the setup run failed (see .libraryan/state/reports/latest.md); retry "
               f"with `python3 {MARK} run --reason setup`", file=sys.stderr)

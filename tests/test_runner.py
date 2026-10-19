@@ -297,3 +297,86 @@ def test_git_rm_of_staged_request(repo, monkeypatch):
     assert runner.run(repo, cfg, "manual") == 0
     assert libraryan_commits(repo) == ["docs(libraryan): manual run"]
     assert git(repo, "status", "--porcelain") == ""
+
+
+def test_stray_code_edits_fail_run_and_nothing_left_staged(repo, monkeypatch):
+    cfg = make_kb(repo)
+    (repo / "app.py").write_text("x = 1\n")
+    (repo / "util.py").write_text("y = 1\n")
+    git(repo, "add", "app.py", "util.py")
+    git(repo, "commit", "-m", "code")
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "codeedit")
+    assert runner.run(repo, cfg, "manual") == 1
+    assert libraryan_commits(repo) == []
+    assert git(repo, "diff", "--cached", "--name-only") == ""  # util.py deletion not left staged
+    assert (repo / "docs/kb/index.md").read_text() == "# Index\n"
+    assert (repo / "app.py").read_text() == "x = 2\n"  # foreign paths are reported, not restored
+    report = (state(repo) / "reports/latest.md").read_text()
+    assert "non-owned paths changed" in report and "app.py" in report and "util.py" in report
+
+
+def test_model_env_strips_claude_session_vars(repo, monkeypatch):
+    cfg = make_kb(repo)
+    monkeypatch.setenv("CLAUDECODE", "1")
+    monkeypatch.setenv("CLAUDE_CODE_ENTRYPOINT", "cli")
+    monkeypatch.setenv("GIT_INDEX_FILE", "/tmp/dead-index")
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "env")
+    assert runner.run(repo, cfg, "manual") == 0
+    keys = (state(repo) / "fake_claude_env").read_text().split()
+    assert "LIBRARYAN" in keys
+    assert not [k for k in keys if k == "CLAUDECODE" or k.startswith(("CLAUDE_CODE_", "GIT_"))]
+
+
+def _alive(pid):
+    try:
+        return Path(f"/proc/{pid}/stat").read_text().split(")")[-1].split()[0] != "Z"
+    except FileNotFoundError:
+        return False
+
+
+def test_timeout_kills_process_group(repo, monkeypatch):
+    cfg = make_kb(repo)
+    cfg["run_timeout_minutes"] = 0.02
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "spawn")
+    assert runner.run(repo, cfg, "manual") == 1
+    pid = int((state(repo) / "fake_claude_child").read_text())
+    for _ in range(20):
+        if not _alive(pid):
+            break
+        time.sleep(0.1)
+    else:
+        os.kill(pid, 9)
+        raise AssertionError("model's child survived the timeout")
+
+
+def test_setup_uses_setup_timeout(repo, monkeypatch):
+    cfg = make_kb(repo)
+    seen = []
+    monkeypatch.setattr(runner, "_call_model", lambda cmd, root, timeout: seen.append(timeout) or ("", []))
+    runner.run(repo, cfg, "setup")
+    add_request(repo)
+    git(repo, "add", ".libraryan/requests")
+    runner.run(repo, cfg, "manual")
+    assert seen == [cfg["setup_timeout_minutes"] * 60, cfg["run_timeout_minutes"] * 60]
+    assert config.DEFAULTS["setup_timeout_minutes"] == 120
+
+
+def test_interrupt_restores_and_reports(repo, monkeypatch):
+    cfg = make_kb(repo)
+    add_request(repo)
+
+    def half_done(cmd, root, timeout):
+        with open(repo / "docs/kb/index.md", "a") as f:
+            f.write("half\n")
+        git(repo, "rm", "-q", "--", "README.md")
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(runner, "_call_model", half_done)
+    try:
+        runner.run(repo, cfg, "manual")
+        raise AssertionError("KeyboardInterrupt swallowed")
+    except KeyboardInterrupt:
+        pass
+    assert git(repo, "status", "--porcelain", "--untracked-files=no") == ""
+    assert (repo / "docs/kb/index.md").read_text() == "# Index\n"
+    assert "KeyboardInterrupt" in (state(repo) / "reports/latest.md").read_text()
