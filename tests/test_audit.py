@@ -51,7 +51,7 @@ def test_missing_path_found(repo):
 
 
 def test_missing_path_ignores_non_paths(repo):
-    body = ("`https://x.io/a.py` `src/*.py` `<file>.py` `~/x/y.py` `$HOME/a.py` `/etc/hosts` `{a}/b.py` `a b.py`\n"
+    body = ("`https://x.io/a.py` `src/*.py` `<file>.py` `~/x/y.py` `$HOME/a.py` `/etc/hosts` `{a}/b.py` `a b.py` `@AGENTS.md`\n"
             "```\nsrc/fenced.py\n`src/fenced2.py`\n```\n")
     cfg = kb(repo, {"a.md": note(body=body)})
     (repo / "README.md").write_text("# t\n`src/app.py` and `app.py` exist\n")
@@ -104,3 +104,13 @@ def test_format_caps():
     f = [("stale", f"n{i}.md", "x") for i in range(5)]
     assert audit.format([]) == "- (none)"
     assert audit.format(f, cap=2) == "stale n0.md: x\nstale n1.md: x\n… and 3 more"
+
+
+def test_fresh_install_is_clean(repo):
+    from pathlib import Path
+
+    from libraryan import install
+    assert install.init(repo, Path(__file__).resolve().parent.parent, run_setup=False) == 0
+    (repo / "docs/kb").mkdir(parents=True)
+    (repo / "docs/kb/index.md").write_text("# Index\n")
+    assert audit.run(repo, config.load(repo)) == []

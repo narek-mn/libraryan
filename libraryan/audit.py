@@ -37,7 +37,7 @@ def frontmatter(text: str) -> dict[str, str | list[str]]:
 def looks_like_path(token: str) -> bool:
     t = SUFFIX.sub("", token.strip())
     if (not t or any(c in t for c in " *<>${") or checks.SCHEME.match(t) or "://" in t
-            or t.startswith(("~", "/"))):
+            or t.startswith(("~", "/", "@"))):  # @file: a Claude Code import
         return False
     return "/" in t or posixpath.splitext(t)[1] in EXTS
 
@@ -71,7 +71,11 @@ def run(root: Path, cfg: dict) -> list[Finding]:
             dates[src] = r.stdout.strip() if r.returncode == 0 else ""
         return dates[src]
 
-    docs = [p for p in files if p.endswith(".md") and is_protected(p, cfg) and not p.startswith(".libraryan/")]
+    from .install import PATHS  # here: install imports runner, which imports this module
+    # Libraryan's own installed files are not the project's docs (and the agent may not edit them)
+    own = tuple(p for p in PATHS if p.startswith(".claude/")) + (".libraryan/",)
+    docs = [p for p in files if p.endswith(".md") and is_protected(p, cfg)
+            and not any(p == o or p.startswith(o.rstrip("/") + "/") for o in own)]
     index = _read(root / kb / "index.md")
     indexed = {r for _, r in checks._links(root, f"{kb}/index.md", index)} if index else set()
     out: list[Finding] = []

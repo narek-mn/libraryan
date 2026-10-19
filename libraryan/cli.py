@@ -78,8 +78,11 @@ def main(argv: list[str]) -> int:
             print(p)
         return 1 if problems else 0
     if cmd == "audit":
-        root = gitutil.repo_root(Path.cwd())
-        print(audit.format(audit.run(root, config.load(root)), cap=10**6))
+        try:
+            root = gitutil.repo_root(Path.cwd())
+            print(audit.format(audit.run(root, config.load(root)), cap=10**6))
+        except Exception as e:  # findings are leads, never a gate: exit 0 always
+            print(f"libraryan audit failed: {e}", file=sys.stderr)
         return 0
     if cmd == "upgrade":  # run the source checkout's own installer so new install logic applies
         root = gitutil.repo_root(Path.cwd())
