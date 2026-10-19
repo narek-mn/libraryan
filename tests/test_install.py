@@ -293,3 +293,18 @@ def test_vendored_cli_upgrade_uses_source(repo):
     assert r.returncode == 0, r.stderr
     assert subject(repo) == "docs(libraryan): upgrade"
     assert not (repo / ".libraryan/libraryan/gone.py").exists()
+
+
+def test_init_refuses_dirty_settings(repo):
+    (repo / ".claude").mkdir()
+    (repo / ".claude/settings.json").write_text("{}\n")
+    assert install.init(repo, SRC, run_setup=False) != 0
+    assert not (repo / ".libraryan").exists()
+
+
+def test_upgrade_refuses_pending_untracked_request(repo):
+    install.init(repo, SRC, run_setup=False)
+    head = git(repo, "rev-parse", "HEAD").stdout
+    (repo / ".libraryan/requests/20261019-120000-x.md").write_text("in progress\n")
+    assert install.upgrade(repo, SRC) != 0
+    assert git(repo, "rev-parse", "HEAD").stdout == head

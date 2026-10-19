@@ -107,6 +107,15 @@ def _commit(project: Path, what: str) -> int:
     return r.returncode
 
 
+def _dirty(project: Path, cfg: dict) -> bool:
+    """Uncommitted docs or installer paths (e.g. a request still being written) would be swept into our commit."""
+    dirty = [p for p in runner._baseline(project)
+             if is_protected(p, cfg) or any(p == x or p.startswith(x + "/") for x in PATHS)]
+    if dirty:
+        print("libraryan: commit or stash these changes first:\n  " + "\n  ".join(dirty), file=sys.stderr)
+    return bool(dirty)
+
+
 def _default_branch(project: Path) -> str:
     ref = gitutil.git(project, "symbolic-ref", "--short", "refs/remotes/origin/HEAD", check=False)
     return ref.split("/", 1)[1] if ref else gitutil.current_branch(project)
@@ -119,10 +128,7 @@ def init(project: Path, source: Path, run_setup: bool = True) -> int:
         print(f"libraryan: check out the default branch `{branch}` first", file=sys.stderr)
         return 1
     cfg = config.load(project)
-    dirty = [p for p in runner._baseline(project) if is_protected(p, cfg)]
-    if dirty:
-        print("libraryan: commit or stash these documentation changes first:\n  " + "\n  ".join(dirty),
-              file=sys.stderr)
+    if _dirty(project, cfg):
         return 1
     claude = shutil.which("claude")
     if not claude and run_setup:
@@ -166,6 +172,8 @@ def init(project: Path, source: Path, run_setup: bool = True) -> int:
 
 def upgrade(project: Path, source: Path) -> int:
     project = Path(project)
+    if _dirty(project, config.load(project)):
+        return 1
     _copy(project, Path(source))
     config.save(project, config.load(project))  # adds keys new in DEFAULTS, keeps existing values
     return _commit(project, "upgrade")
