@@ -319,15 +319,15 @@ footer a{color:var(--dim)}footer a:hover{color:var(--fg)}
         <tbody>
           <tr><td>It deletes something important</td><td>A deleted doc must be a pure move, or the run must quote where each fact went. Quotes are checked mechanically, otherwise the deletion is restored. Git keeps everything.</td></tr>
           <tr><td>It hallucinates</td><td>Every commit passes a second agent that sees the diff, not the author's reasoning, and <strong>fails closed</strong>.</td></tr>
-          <tr><td>It touches my code</td><td>It writes only paths it owns. Anything else is restored, and code issues go into the report.</td></tr>
+          <tr><td>It touches my code</td><td>It works in a throwaway copy of the repo; only owned docs come back. Anything else is discarded, and code issues go into the report.</td></tr>
           <tr><td>It leaks a secret into docs</td><td>It is told never to copy secrets, and an optional gitleaks scan runs on every run.</td></tr>
-          <tr><td>It burns money</td><td><code>--max-budget-usd</code> on every call, plus daily caps on runs, commits and failure streaks. Quiet nights skip the model entirely.</td></tr>
+          <tr><td>It burns money</td><td>Claude Code calls get <code>--max-budget-usd</code>; other runtimes get a time limit and, where the tool has one, a turn cap. Every runtime gets daily caps on runs, commits and failure streaks. Quiet nights skip the model entirely.</td></tr>
           <tr><td>Other agents treat a request as a command</td><td>Request files are data, never instructions.</td></tr>
           <tr><td>I want it gone</td><td><code>libraryan uninstall</code> removes hooks, cron and the agent in one commit. Your docs stay.</td></tr>
         </tbody>
       </table>
     </div>
-    <p class="note"><strong>Honest limits:</strong> Libraryan's own writer and reviewer run through Claude Code today; more runtimes (Codex CLI, Gemini CLI) are planned. Linux and macOS only. The lock is a guardrail, not a security boundary (<code>git commit --no-verify</code> skips it). See <a href="https://github.com/narek-mn/libraryan/blob/main/docs/guide.md#known-limits">Known limits</a>.</p>
+    <p class="note"><strong>Honest limits:</strong> non-Claude runtimes are experimental until each has had a real smoke run (see the guide). Linux and macOS only. The lock is a guardrail, not a security boundary (<code>git commit --no-verify</code> skips it). See <a href="https://github.com/narek-mn/libraryan/blob/main/docs/guide.md#known-limits">Known limits</a>.</p>
   </div>
 </section>
 
@@ -338,7 +338,7 @@ footer a{color:var(--dim)}footer a:hover{color:var(--fg)}
     <p class="sub">From now on Libraryan updates the docs after your commits and checks them once a day. It commits locally and <strong>never pushes</strong>. Remove it at any time with <code>libraryan uninstall</code>; the docs stay.</p>
     <div class="qs">
       <div class="panel">
-        <h3>Terminal <small>Python 3.10+ · pipx · git · Claude Code</small></h3>
+        <h3>Terminal <small>Python 3.10+ · pipx · git · one agent CLI</small></h3>
         <pre><span class="t-b">$</span> pipx install libraryan     <span class="t-d"># once per machine</span>
 <span class="t-b">$</span> cd your-project            <span class="t-d"># any git repo, on its default branch</span>
 <span class="t-b">$</span> libraryan init             <span class="t-d"># once per project</span><button class="copy" type="button" data-copy="pipx install libraryan&#10;cd your-project&#10;libraryan init" aria-label="Copy terminal commands"><svg aria-hidden="true"><use href="#copy"/></svg></button></pre>
@@ -362,8 +362,8 @@ footer a{color:var(--dim)}footer a:hover{color:var(--fg)}
     <h2>Questions</h2>
     <div class="faq">
       <details><summary>Why not just put "keep the docs updated" in CLAUDE.md?</summary><p>Because every agent then writes docs in its own style, at its own time, without checking them against the code. That instruction is how Markdown rot starts. Libraryan makes one writer responsible and enforces it with hooks, so the rule can't be skipped by accident.</p></details>
-      <details><summary>What does it cost?</summary><p>You pay for your own model usage. A run happens only after commits, on request, or when the daily audit finds something. Quiet days are free. Hard caps apply per call (default $5 for a run, $25 for the first setup) and per day. <code>libraryan stats</code> shows the real spend.</p></details>
-      <details><summary>Does it work with Cursor, Copilot, Gemini or Codex agents?</summary><p>Yes. The git pre-commit hook rejects any tool's commits to owned docs, the request rules are written into <code>AGENTS.md</code>, which those agents read, and the knowledge base is plain Markdown any model can use. Libraryan's own writer runs through Claude Code today; other runtimes are planned.</p></details>
+      <details><summary>What does it cost?</summary><p>You pay for your own model usage. A run happens only after commits, on request, or when the daily audit finds something. Quiet days are free. On Claude Code, hard caps apply per call (default $5 for a run, $25 for the first setup); other runtimes are bounded by a time limit and, where the tool has one, a turn cap. Daily caps apply to every runtime. <code>libraryan stats</code> shows the real spend.</p></details>
+      <details><summary>Does it work with Cursor, Copilot, Gemini or Codex agents?</summary><p>Yes. The git pre-commit hook rejects any tool's commits to owned docs, the request rules are written into <code>AGENTS.md</code>, which those agents read, and the knowledge base is plain Markdown any model can use. Libraryan's own writer and reviewer run on Claude Code, Codex, Gemini, Qwen, Copilot, OpenCode or Cursor (or any CLI through a custom command); the non-Claude ones are experimental until smoke-tested.</p></details>
       <details><summary>Will it push or open PRs?</summary><p>No. It commits locally, on your default branch only, under its own <code>docs(libraryan):</code> prefix. You decide when to push.</p></details>
       <details><summary>Can my teammates still change docs?</summary><p>Yes, by filing a request: a short Markdown file under <code>.libraryan/requests/</code>. Their agents learn how from the <code>libraryan-request</code> skill and <code>AGENTS.md</code>. You can also exempt paths in the config.</p></details>
     </div>

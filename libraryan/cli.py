@@ -6,12 +6,16 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import __version__, audit, cchooks, checks, config, gitutil, install, precommit, runner, trace
+from . import __version__, audit, cchooks, checks, config, gitutil, install, precommit, runner, runtimes, trace
 from .paths import is_protected, is_request
 
 USAGE = """usage: libraryan <command>
 
-  init [--no-setup]   install into this git repo and run the setup (--no-setup: install only)
+  init [--no-setup] [--runtime NAME]
+                      install into this git repo and run the setup (--no-setup: install only;
+                      the agent CLI is picked automatically unless --runtime says which)
+  runtime [NAME] [--reviewer]
+                      show the agent CLIs in use and found, or switch to NAME
   upgrade             refresh the project's vendored copy from this installed version
   uninstall           remove Libraryan (the knowledge base stays)
   run [--reason R]    run now (default reason: manual)
@@ -59,6 +63,52 @@ def _upgrade() -> int:
     return subprocess.run([exe, "upgrade"], cwd=root, env={**os.environ, "LIBRARYAN_UPGRADING": "1"}).returncode
 
 
+def _runtime(root: Path, name: str | None, reviewer: bool) -> int:
+    if name and not (root / config.CONFIG_PATH).is_file():
+        print("libraryan: not installed here; run: libraryan init", file=sys.stderr)
+        return 1
+    cfg = config.load(root)
+    if name and not runner._on_default(root, cfg):
+        print(f"libraryan: check out the default branch `{cfg['default_branch']}` first", file=sys.stderr)
+        return 1
+    if name and install._dirty(root, cfg, docs=False):
+        return 1
+    if name is None:
+        def show(n, b):  # `command` has no binary to probe: show what it runs
+            if n == "command":
+                return f"command custom command ({(cfg['runtime_command'] or ['runtime_command not set'])[0]})"
+            return f"{n} {runtimes.detect(n, b) or 'not found'} ({b or runtimes.get(n).BIN})"
+        w, r = cfg["runtime"], cfg["reviewer_runtime"]
+        print(f"writer:   {show(w, cfg['runtime_bin'])}")
+        print(f"reviewer: {show(r, cfg['reviewer_runtime_bin'])}" if r and r != w else f"reviewer: {w} (same as writer)")
+        print("found:    " + (", ".join(f"{n} {v}" for n in runtimes.ORDER if (v := runtimes.detect(n))) or "none"))
+        return 0
+    try:
+        adapter = runtimes.get(name)
+    except ValueError as e:
+        print(f"libraryan: {e}", file=sys.stderr)
+        return 1
+    if name == "command":
+        if not cfg["runtime_command"]:
+            print("libraryan: runtime command needs `runtime_command` in .libraryan/config.json", file=sys.stderr)
+            return 1
+        path = None
+    elif not (path := shutil.which(adapter.BIN)) or not runtimes.detect(name, path):
+        print(f"libraryan: {name} not found on PATH; install it first: {adapter.INSTALL}", file=sys.stderr)
+        return 1
+    key, what = ("reviewer_runtime" if reviewer else "runtime"), f"runtime {name}"
+    if reviewer and name == cfg["runtime"]:  # same as the writer: back to "same as writer"
+        name = path = None
+    cfg[key], cfg[key + "_bin"] = name, path
+    old = (root / config.CONFIG_PATH).read_text()
+    config.save(root, cfg)
+    code = install._commit(root, what, cfg)
+    if code:  # _commit may have staged it
+        gitutil.git(root, "reset", "-q", "--", config.CONFIG_PATH, check=False)
+        (root / config.CONFIG_PATH).write_text(old)
+    return code
+
+
 def main(argv: list[str]) -> int:
     cmd = argv[0] if argv else ""
     if cmd in ("-h", "--help", "help"):
@@ -70,11 +120,18 @@ def main(argv: list[str]) -> int:
     if cmd == "init":
         ap = argparse.ArgumentParser(prog="libraryan init")
         ap.add_argument("--no-setup", action="store_true", help="install only; skip the setup run (no model call)")
-        no_setup = ap.parse_args(argv[1:]).no_setup
+        ap.add_argument("--runtime", help="agent CLI to use: " + ", ".join(runtimes.NAMES))
+        a = ap.parse_args(argv[1:])
         if not PACKAGED:
             print("libraryan: install the tool first: pipx install libraryan", file=sys.stderr)
             return 1
-        return install.init(gitutil.repo_root(Path.cwd()), run_setup=not no_setup)
+        return install.init(gitutil.repo_root(Path.cwd()), run_setup=not a.no_setup, runtime=a.runtime)
+    if cmd == "runtime":
+        ap = argparse.ArgumentParser(prog="libraryan runtime")
+        ap.add_argument("name", nargs="?")
+        ap.add_argument("--reviewer", action="store_true", help="switch the reviewer's tool only")
+        a = ap.parse_args(argv[1:])
+        return _runtime(gitutil.repo_root(Path.cwd()), a.name, a.reviewer)
     if cmd == "precommit":
         return _precommit()
     if cmd == "guard":

@@ -40,3 +40,12 @@ def is_protected(path: str, cfg: dict) -> bool:
     if any(glob_match(path, p) for p in cfg["excluded"] + cfg["exempt"]):
         return False
     return any(glob_match(path, p) for p in cfg["owned"])
+
+
+MACHINERY = (".libraryan/**", ".claude/agents/libraryan.md", ".claude/agents/libraryan-reviewer.md",
+             ".claude/skills/libraryan-request/**")
+
+
+def is_machinery(path: str) -> bool:
+    """Libraryan's own files (config, hooks, instructions): never changed by a model session. Requests are not."""
+    return not is_request(path) and any(glob_match(path, p) for p in MACHINERY)

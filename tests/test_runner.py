@@ -1,3 +1,4 @@
+import sys
 import fcntl
 import json
 import os
@@ -5,10 +6,14 @@ import subprocess
 import time
 from pathlib import Path
 
+import pytest
+
 from helpers import install_runtime
 from libraryan import config, runner
+from libraryan.runtimes import claude
 
 FAKE = Path(__file__).resolve().parent / "fake_claude.py"
+FAKE_RUNTIME = FAKE.with_name("fake_runtime.py")
 
 
 def git(repo, *args, env=None):
@@ -16,7 +21,7 @@ def git(repo, *args, env=None):
     return subprocess.run(["git", *args], cwd=repo, capture_output=True, text=True, check=True, env=e).stdout
 
 
-def make_kb(repo, ignore_state=True):
+def make_kb(repo, ignore_state=True, runtime="claude", monkeypatch=None):
     install_runtime(repo)
     if ignore_state:
         (repo / ".libraryan/.gitignore").write_text("state/\n")
@@ -25,7 +30,12 @@ def make_kb(repo, ignore_state=True):
     git(repo, "add", "-A")
     git(repo, "commit", "-m", "kb", env={"LIBRARYAN": "1"})
     cfg = config.load(repo)
-    cfg["claude_bin"] = str(FAKE)
+    cfg["runtime_bin"] = str(FAKE)
+    if runtime != "claude":  # one shared fake, its output format picked by FAKE_FORMAT
+        cfg.update(runtime=runtime, runtime_bin=str(FAKE_RUNTIME))
+        monkeypatch.setenv("FAKE_FORMAT", "text" if runtime == "command" else runtime)
+        if runtime == "command":
+            cfg["runtime_command"] = [sys.executable, str(FAKE_RUNTIME), "{prompt}"]
     return cfg
 
 
@@ -55,8 +65,9 @@ def test_run_noop_without_work(repo):
     assert not (state(repo) / "fake_claude_ran").exists()
 
 
-def test_run_commits_changes(repo):
-    cfg = make_kb(repo)
+@pytest.mark.parametrize("runtime", ["claude", "codex", "command"])
+def test_run_commits_changes(repo, runtime, monkeypatch):
+    cfg = make_kb(repo, runtime=runtime, monkeypatch=monkeypatch)
     add_request(repo)
     assert runner.run(repo, cfg, "manual") == 0
     assert libraryan_commits(repo) == ["docs(libraryan): manual run"]
@@ -312,22 +323,6 @@ def test_git_rm_of_staged_request(repo, monkeypatch):
     assert git(repo, "status", "--porcelain") == ""
 
 
-def test_stray_code_edits_fail_run_and_nothing_left_staged(repo, monkeypatch):
-    cfg = make_kb(repo)
-    (repo / "app.py").write_text("x = 1\n")
-    (repo / "util.py").write_text("y = 1\n")
-    git(repo, "add", "app.py", "util.py")
-    git(repo, "commit", "-m", "code")
-    monkeypatch.setenv("FAKE_CLAUDE_MODE", "codeedit")
-    assert runner.run(repo, cfg, "manual") == 1
-    assert libraryan_commits(repo) == []
-    assert git(repo, "diff", "--cached", "--name-only") == ""  # util.py deletion not left staged
-    assert (repo / "docs/kb/index.md").read_text() == "# Index\n"
-    assert (repo / "app.py").read_text() == "x = 2\n"  # foreign paths are reported, not restored
-    report = (state(repo) / "reports/latest.md").read_text()
-    assert "non-owned paths changed" in report and "app.py" in report and "util.py" in report
-
-
 def test_model_env_strips_claude_session_vars(repo, monkeypatch):
     cfg = make_kb(repo)
     monkeypatch.setenv("CLAUDECODE", "1")
@@ -346,25 +341,10 @@ def test_model_env_strips_claude_session_vars(repo, monkeypatch):
                 or k.startswith("GIT_") or ("CLAUDE_CODE_" in k and "SESSION" in k)]
 
 
-def test_foreign_edit_only_failure_does_not_back_off(repo, monkeypatch):
+def test_owned_doc_conflict_plus_lint_failure_still_backs_off(repo, monkeypatch):
     cfg = make_kb(repo)
-    (repo / "util.py").write_text("y = 1\n")
-    git(repo, "add", "util.py")
-    git(repo, "commit", "-m", "code")
     commit_request(repo)
-    monkeypatch.setenv("FAKE_CLAUDE_MODE", "codeedit")
-    assert runner.run(repo, cfg, "commit") == 1
-    assert not (state(repo) / "last_failed").exists()
-    assert runner.find_work(repo, cfg, "commit")["requests"]  # next trigger retries at the same HEAD
-
-
-def test_foreign_edit_plus_lint_failure_still_backs_off(repo, monkeypatch):
-    cfg = make_kb(repo)
-    (repo / "util.py").write_text("y = 1\n")
-    git(repo, "add", "util.py")
-    git(repo, "commit", "-m", "code")
-    commit_request(repo)
-    monkeypatch.setenv("FAKE_CLAUDE_MODE", "codeedit,badnote")
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "real_doc_edit,badnote")
     assert runner.run(repo, cfg, "commit") == 1
     assert (state(repo) / "last_failed").exists()
 
@@ -408,10 +388,24 @@ def test_timeout_kills_process_group(repo, monkeypatch):
         raise AssertionError("model's child survived the timeout")
 
 
+def record_timeouts(monkeypatch):
+    """Timeouts the model calls were given (git calls pass none)."""
+    seen = []
+
+    class Rec(subprocess.Popen):
+        def communicate(self, input=None, timeout=None):
+            if timeout:
+                seen.append(timeout)
+            return super().communicate(input, timeout)
+
+    monkeypatch.setattr(subprocess, "Popen", Rec)
+    return seen
+
+
 def test_setup_uses_setup_timeout(repo, monkeypatch):
     cfg = make_kb(repo)
-    seen = []
-    monkeypatch.setattr(runner, "_call_model", lambda cmd, root, timeout: seen.append(timeout) or ("", [], {}))
+    cfg["independent_review"] = False
+    seen = record_timeouts(monkeypatch)
     runner.run(repo, cfg, "setup")
     add_request(repo)
     git(repo, "add", ".libraryan/requests")
@@ -424,10 +418,10 @@ def test_interrupt_restores_and_reports(repo, monkeypatch):
     cfg = make_kb(repo)
     add_request(repo)
 
-    def half_done(cmd, root, timeout):
-        with open(repo / "docs/kb/index.md", "a") as f:
+    def half_done(role, prompt, cwd, cfg, reason):
+        with open(cwd / "docs/kb/index.md", "a") as f:
             f.write("half\n")
-        git(repo, "rm", "-q", "--", "README.md")
+        git(cwd, "rm", "-q", "--", "README.md")
         raise KeyboardInterrupt
 
     monkeypatch.setattr(runner, "_call_model", half_done)
@@ -439,6 +433,7 @@ def test_interrupt_restores_and_reports(repo, monkeypatch):
     assert git(repo, "status", "--porcelain", "--untracked-files=no") == ""
     assert (repo / "docs/kb/index.md").read_text() == "# Index\n"
     assert "KeyboardInterrupt" in (state(repo) / "reports/latest.md").read_text()
+    assert no_worktree(repo)
 
 
 def test_cli_check_owned_files_only_non_ascii(repo):
@@ -472,7 +467,6 @@ def test_missing_index_promotes_to_setup(repo):
     cfg = make_kb(repo)
     git(repo, "rm", "-q", "docs/kb/index.md")
     git(repo, "commit", "-m", "rm index", env={"LIBRARYAN": "1"})
-    (repo / "docs/kb").mkdir(parents=True)  # fake claude writes into it
     assert runner.run(repo, cfg, "commit") == 0
     assert "Reason: setup" in (state(repo) / "fake_claude_prompt").read_text()
     assert libraryan_commits(repo) == ["docs(libraryan): setup run"]
@@ -526,7 +520,7 @@ def test_trace_failed_and_aborted(repo, monkeypatch):
     t = last_trace(repo)
     assert t["outcome"] == "failed" and t["problems"] >= 1 and t["commit"] is None
 
-    def boom(cmd, root, timeout):
+    def boom(role, prompt, cwd, cfg, reason):
         raise KeyboardInterrupt
 
     monkeypatch.setattr(runner, "_call_model", boom)
@@ -537,14 +531,32 @@ def test_trace_failed_and_aborted(repo, monkeypatch):
     assert last_trace(repo)["outcome"] == "aborted"
 
 
-def test_nojson_output_still_works(repo, monkeypatch):
+def test_nojson_output_fails(repo, monkeypatch):
     cfg = make_kb(repo)
     add_request(repo)
     monkeypatch.setenv("FAKE_CLAUDE_MODE", "nojson")
+    assert runner.run(repo, cfg, "manual") == 1
+    assert last_trace(repo)["outcome"] == "failed" and libraryan_commits(repo) == []
+    assert "claude failed (exit 0)" in (state(repo) / "reports/latest.md").read_text()
+
+
+def test_missing_runtime_binary_fails_and_backs_off(repo):
+    cfg = make_kb(repo)
+    cfg["runtime_bin"] = str(repo / "no-such-claude")
+    add_request(repo)
+    assert runner.run(repo, cfg, "manual") == 1
+    assert "could not start" in (state(repo) / "reports/latest.md").read_text()
+    assert (state(repo) / "last_failed").exists() and libraryan_commits(repo) == []
+
+
+def test_unknown_cost_reported(repo, monkeypatch):
+    from libraryan import trace
+    cfg = make_kb(repo)
+    add_request(repo)
+    monkeypatch.setattr(runner, "_call_model", lambda *a: ("done", [], {"runtime": "x", "cost_usd": None}))
     assert runner.run(repo, cfg, "manual") == 0
-    t = last_trace(repo)
-    assert t["outcome"] == "committed" and "cost_usd" not in t["calls"][0]
-    assert "SUMMARY ok" in git(repo, "log", "-1", "--format=%b")
+    assert "- Cost: unknown" in (state(repo) / "reports/latest.md").read_text()
+    assert trace.stats(state(repo)).endswith(" unknown=1")
 
 
 def test_trace_failure_does_not_break_run(repo):
@@ -662,13 +674,15 @@ def test_run_fails_on_move_into_discarded_file(repo, monkeypatch):
     assert "deletion ledger: docs/old.md" in (state(repo) / "reports/latest.md").read_text()
 
 
-def test_reviewer_reject_fails_run(repo, monkeypatch):
-    cfg = make_kb(repo)
+@pytest.mark.parametrize("runtime", ["claude", "codex", "command"])
+def test_reviewer_reject_fails_run(repo, runtime, monkeypatch):
+    cfg = make_kb(repo, runtime=runtime, monkeypatch=monkeypatch)
     add_request(repo)
-    monkeypatch.setenv("FAKE_REVIEW", "REJECT: docs/kb/index.md: wrong")
+    monkeypatch.setenv("FAKE_REVIEW", "REJECT: docs/kb/index.md: no")
+    monkeypatch.setenv("FAKE_RUNTIME_MODE", "reject")
     assert runner.run(repo, cfg, "manual") == 1
     assert libraryan_commits(repo) == [] and (repo / "docs/kb/index.md").read_text() == "# Index\n"
-    assert "review: REJECT: docs/kb/index.md: wrong" in (state(repo) / "reports/latest.md").read_text()
+    assert "review: REJECT: docs/kb/index.md: no" in (state(repo) / "reports/latest.md").read_text()
     assert [c["role"] for c in last_trace(repo)["calls"]] == ["author", "reviewer"]
 
 
@@ -679,18 +693,17 @@ def test_reviewer_edit_rejected(repo, monkeypatch):
     assert runner.run(repo, cfg, "manual") == 1
     assert libraryan_commits(repo) == [] and (repo / "docs/kb/index.md").read_text() == "# Index\n"
     assert "review: reviewer modified files: docs/kb/index.md" in (state(repo) / "reports/latest.md").read_text()
-    assert not (state(repo) / "last_failed").exists()  # indistinguishable from another agent: transient
+    assert (state(repo) / "last_failed").exists()  # only the reviewer edits the worktree: not transient
 
 
-def test_new_doc_during_review_is_reported_not_removed(repo, monkeypatch):
+def test_new_doc_in_checkout_during_review_left_alone(repo, monkeypatch):
     cfg = make_kb(repo)
     add_request(repo)
     monkeypatch.setenv("FAKE_CLAUDE_MODE", "review_newdoc")
-    assert runner.run(repo, cfg, "manual") == 1
-    assert libraryan_commits(repo) == [] and (repo / "docs/kb/index.md").read_text() == "# Index\n"
+    assert runner.run(repo, cfg, "manual") == 0
+    assert libraryan_commits(repo) == ["docs(libraryan): manual run"]
     assert (repo / "docs/other.md").read_text() == "another agent\n"
-    assert "review: reviewer modified files: docs/other.md" in (state(repo) / "reports/latest.md").read_text()
-    assert not (state(repo) / "last_failed").exists()
+    assert "docs/other.md" not in head_files(repo)
 
 
 def test_request_written_during_review_survives(repo, monkeypatch):
@@ -734,19 +747,14 @@ def test_review_disabled(repo):
 
 
 def test_reviewer_args(repo):
-    from libraryan import review
     cfg = make_kb(repo)
     cfg["model"] = "m-author"
     add_request(repo)
     assert runner.run(repo, cfg, "manual") == 0
     a = json.loads((state(repo) / "fake_review_argv").read_text())
     assert a[a.index("--agent") + 1] == "libraryan-reviewer" and a[a.index("--max-budget-usd") + 1] == "2"
-    assert a[a.index("--allowedTools") + 1] == review.REVIEW_TOOLS
+    assert a[a.index("--allowedTools") + 1] == claude.REVIEW_TOOLS
     assert a[a.index("--permission-mode") + 1] == "default" and a[a.index("--model") + 1] == "m-author"
-    cmds = []
-    review.run_review(repo, {**cfg, "reviewer_model": "m-review"}, "manual", ["a.md"], {"baseline": []}, [],
-                      lambda cmd, root, timeout: cmds.append(cmd) or ("APPROVE", [], {}), lambda r, c: {})
-    assert cmds[0][cmds[0].index("--model") + 1] == "m-review"
 
 
 def test_commit_failure_backs_off(repo, monkeypatch):
@@ -791,7 +799,7 @@ def test_health_with_findings_calls_model_with_list(repo):
 
 
 def test_audit_tool_allowed():
-    assert "Bash(python3 .libraryan/bin/libraryan audit:*)" in runner.ALLOWED_TOOLS.split(",")
+    assert "Bash(python3 .libraryan/bin/libraryan audit:*)" in claude.ALLOWED_TOOLS.split(",")
 
 
 def test_cli_audit(repo):
@@ -834,25 +842,25 @@ def test_setup_review_budget_and_timeout(repo, monkeypatch):
     assert config.DEFAULTS["max_usd_review_setup"] == 10
     git(repo, "rm", "-q", "docs/kb/index.md")
     git(repo, "commit", "-m", "rm index", env={"LIBRARYAN": "1"})
-    (repo / "docs/kb").mkdir(parents=True)
     runner.run(repo, cfg, "commit")  # promoted to setup
     a = json.loads((state(repo) / "fake_review_argv").read_text())
     assert a[a.index("--max-budget-usd") + 1] == "10"
-    seen = []
-    call = lambda cmd, root, timeout: seen.append(timeout) or ("APPROVE", [], {})
+    seen = record_timeouts(monkeypatch)
     for reason in ("setup", "commit"):
-        review.run_review(repo, cfg, reason, ["a.md"], {"baseline": []}, [], call, lambda r, c: {})
+        review.run_review(repo, cfg, reason, ["a.md"], {"baseline": []}, [], runner._call_model, lambda r, c: {})
     assert seen == [cfg["setup_timeout_minutes"] * 60, cfg["review_timeout_minutes"] * 60]
 
 
-def test_is_error_fails_run(repo, monkeypatch):
-    cfg = make_kb(repo)
+@pytest.mark.parametrize("runtime", ["claude", "codex", "command"])
+def test_is_error_fails_run(repo, runtime, monkeypatch):
+    cfg = make_kb(repo, runtime=runtime, monkeypatch=monkeypatch)
     commit_request(repo)
     monkeypatch.setenv("FAKE_CLAUDE_MODE", "is_error")
+    monkeypatch.setenv("FAKE_RUNTIME_MODE", "error")
     assert runner.run(repo, cfg, "commit") == 1
     assert last_trace(repo)["outcome"] == "failed" and libraryan_commits(repo) == []
     assert not (state(repo) / "last_processed").exists() and not (state(repo) / "last_health").exists()
-    assert "is_error" in (state(repo) / "reports/latest.md").read_text()
+    assert f"{runtime} failed (exit " in (state(repo) / "reports/latest.md").read_text()
 
 
 def test_reviewer_is_error_rejects(repo, monkeypatch):
@@ -923,19 +931,15 @@ def test_cap_keeps_failure_report(repo, monkeypatch):
     assert new and any(line in p.read_text() for p in new)
 
 
-def test_foreign_edit_skips_review(repo, monkeypatch):
+def test_owned_doc_conflict_skips_review(repo, monkeypatch):
     cfg = make_kb(repo)
-    (repo / "app.py").write_text("x = 1\n")
-    (repo / "util.py").write_text("y = 1\n")
-    git(repo, "add", "app.py", "util.py")
-    git(repo, "commit", "-m", "code")
     add_request(repo)
-    monkeypatch.setenv("FAKE_CLAUDE_MODE", "codeedit")
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "real_doc_edit")
     assert runner.run(repo, cfg, "manual") == 1
     assert not (state(repo) / "fake_review_argv").exists()
     t = last_trace(repo)
     assert [c["role"] for c in t["calls"]] == ["author"] and t["transient"] is True
-    assert (state(repo) / "reports/latest.md").read_text().count("non-owned paths changed") == 1
+    assert (state(repo) / "reports/latest.md").read_text().count(runner.FOREIGN) == 1
 
 
 def test_transient_failures_not_in_streak(repo):
@@ -996,6 +1000,232 @@ def test_call_model_disables_background_tasks_and_times_the_call(tmp_path):
     script = ("import json, os, time; time.sleep(0.3); "
               "print(json.dumps({'result': os.environ.get('CLAUDE_CODE_DISABLE_BACKGROUND_TASKS', ''), "
               "'duration_ms': 1, 'num_turns': 1}))")
-    text, problems, usage = runner._call_model(["python3", "-c", script, "prompt"], tmp_path, 30)
+    (tmp_path / "tool").write_text(f"#!/usr/bin/env python3\n{script}\n")
+    (tmp_path / "tool").chmod(0o755)
+    cfg = {**config.DEFAULTS, "runtime_bin": str(tmp_path / "tool")}
+    text, problems, usage = runner._call_model("author", "prompt", tmp_path, cfg, "manual")
     assert (text, problems) == ("1", [])
-    assert usage["duration_ms"] >= 300
+    assert usage["duration_ms"] >= 300 and usage["runtime"] == "claude"
+
+
+def no_worktree(repo):
+    return not (repo / runner.WORKTREE).exists() and "/wt" not in git(repo, "worktree", "list")
+
+
+def test_author_runs_in_worktree(repo, monkeypatch):
+    cfg = make_kb(repo)
+    add_request(repo)
+    git(repo, "add", "-A")
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "argv,env")
+    assert runner.run(repo, cfg, "manual") == 0
+    assert "updated by fake claude" in (repo / "docs/kb/index.md").read_text()
+    assert (state(repo) / "fake_claude_cwd").read_text().endswith(runner.WORKTREE)
+    assert no_worktree(repo)
+
+
+def test_stray_code_edit_discarded_and_reported(repo, monkeypatch):
+    cfg = make_kb(repo)
+    (repo / "app.py").write_text("x = 1\n")
+    (repo / "util.py").write_text("y = 1\n")
+    git(repo, "add", "app.py", "util.py")
+    git(repo, "commit", "-m", "code")
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "codeedit")
+    assert runner.run(repo, cfg, "manual") == 0
+    assert (repo / "app.py").read_text() == "x = 1\n" and (repo / "util.py").exists()
+    assert git(repo, "status", "--porcelain") == ""
+    report = (state(repo) / "reports/latest.md").read_text()
+    assert "## Ignored (outside owned paths, discarded)\n- app.py\n- util.py" in report
+    assert libraryan_commits(repo) and git(repo, "show", "--name-only", "--format=", "HEAD").split() == [
+        "docs/kb/index.md"]
+
+
+def test_staged_request_seen_and_removed(repo, monkeypatch):
+    cfg = make_kb(repo)
+    add_request(repo)
+    git(repo, "add", ".libraryan/requests")  # staged, never committed
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "gitrm")
+    assert runner.run(repo, cfg, "manual") == 0
+    assert not (repo / ".libraryan/requests/20261019-120000-x.md").exists()
+    assert ".libraryan/requests/20261019-120000-x.md" not in git(repo, "ls-files")
+    assert ".libraryan/requests/20261019-120000-x.md" in (state(repo) / "fake_claude_prompt").read_text()
+
+
+def test_owned_doc_edited_in_real_checkout_during_run_is_transient(repo, monkeypatch):
+    cfg = make_kb(repo)
+    commit_request(repo)
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "real_doc_edit")
+    assert runner.run(repo, cfg, "commit") == 1
+    t = last_trace(repo)
+    assert t["outcome"] == "failed" and t["transient"] and libraryan_commits(repo) == []
+    assert (repo / "docs/kb/index.md").read_text() == "# Index\n- by another agent\n"  # kept, never restored
+    assert not (state(repo) / "last_failed").exists()
+    assert runner.find_work(repo, cfg, "commit")["requests"]  # next trigger retries at the same HEAD
+
+
+def test_code_edit_in_real_checkout_during_run_does_not_fail(repo, monkeypatch):
+    cfg = make_kb(repo)
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "commit")  # another agent commits src.py during the run
+    assert runner.run(repo, cfg, "manual") == 0 and libraryan_commits(repo)
+
+
+def test_stale_worktree_removed_at_start(repo):
+    cfg = make_kb(repo)
+    add_request(repo)
+    git(repo, "add", "-A")
+    git(repo, "worktree", "add", "--detach", runner.WORKTREE, "HEAD")
+    (repo / runner.WORKTREE / "junk.md").write_text("x\n")
+    assert runner.run(repo, cfg, "manual") == 0
+    assert "junk.md" not in head_files(repo) and no_worktree(repo)
+
+
+def test_worktree_removed_after_failure_and_interrupt(repo, monkeypatch):
+    cfg = make_kb(repo)
+    add_request(repo)
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "exit1")
+    assert runner.run(repo, cfg, "manual") == 1
+    assert no_worktree(repo)
+
+    def boom(role, prompt, cwd, cfg, reason):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(runner, "_call_model", boom)
+    try:
+        runner.run(repo, cfg, "manual")
+        raise AssertionError("KeyboardInterrupt swallowed")
+    except KeyboardInterrupt:
+        pass
+    assert no_worktree(repo)
+
+
+def test_baseline_doc_never_copied_back(repo, monkeypatch):
+    cfg = make_kb(repo)
+    (repo / "docs/wip.md").write_text("wip\n")
+    git(repo, "add", "docs/wip.md")
+    git(repo, "commit", "-m", "wip", env={"LIBRARYAN": "1"})
+    (repo / "docs/wip.md").write_text("user's wip\n")
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "edit_wip")
+    assert runner.run(repo, cfg, "manual") == 0
+    assert (repo / "docs/wip.md").read_text() == "user's wip\n"
+    assert git(repo, "show", "--name-only", "--format=", "HEAD").split() == ["docs/kb/index.md"]
+
+
+def test_command_unset_is_a_problem_not_a_crash(repo):
+    cfg = make_kb(repo)
+    commit_request(repo)
+    cfg["runtime"], cfg["runtime_command"] = "command", None
+    assert runner.run(repo, cfg, "commit") == 1
+    assert "runtime_command is not set" in (state(repo) / "reports/latest.md").read_text()
+
+
+@pytest.mark.parametrize("runtime", ["gemini", "qwen", "copilot", "opencode", "cursor"])
+def test_other_runtimes_run_commits(repo, runtime, monkeypatch):
+    cfg = make_kb(repo, runtime=runtime, monkeypatch=monkeypatch)
+    add_request(repo)
+    assert runner.run(repo, cfg, "manual") == 0
+    assert libraryan_commits(repo) == ["docs(libraryan): manual run"]
+
+
+def test_gemini_empty_stdout_stderr_error_fails_run(repo, monkeypatch):
+    cfg = make_kb(repo, runtime="gemini", monkeypatch=monkeypatch)
+    commit_request(repo)
+    monkeypatch.setenv("FAKE_RUNTIME_MODE", "error")
+    assert runner.run(repo, cfg, "commit") == 1
+    assert libraryan_commits(repo) == []
+    assert "gemini failed (exit 1): fake runtime failed" in (state(repo) / "reports/latest.md").read_text()
+
+
+def test_qwen_turn_cap_hit_fails_run(repo, monkeypatch):
+    cfg = make_kb(repo, runtime="qwen", monkeypatch=monkeypatch)
+    commit_request(repo)
+    monkeypatch.setenv("FAKE_RUNTIME_MODE", "turn_cap")
+    assert runner.run(repo, cfg, "commit") == 1
+    assert last_trace(repo)["outcome"] == "failed" and libraryan_commits(repo) == []
+    assert "qwen failed (exit 53)" in (state(repo) / "reports/latest.md").read_text()
+
+
+def machinery_kb(repo, monkeypatch):
+    cfg = make_kb(repo, runtime="command", monkeypatch=monkeypatch)
+    (repo / ".claude/agents").mkdir(parents=True)
+    (repo / ".claude/agents/libraryan-reviewer.md").write_text("# real reviewer\n")
+    (repo / ".gitignore").write_text(".claude/settings.local.json\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-m", "agents", env={"LIBRARYAN": "1"})
+    commit_request(repo)
+    monkeypatch.setenv("FAKE_RUNTIME_MODE", "machinery")
+    return cfg
+
+
+MACHINERY = [".claude/agents/libraryan-reviewer.md", ".libraryan/agents/libraryan-reviewer.md",
+             ".libraryan/config.json", ".libraryan/hooks/pre-commit"]
+IGNORED = [".claude/agents/libraryan-reviewer.md", ".claude/agents/x.md", *MACHINERY[1:]]
+
+
+def test_author_cannot_commit_libraryan_machinery(repo, monkeypatch):
+    cfg = machinery_kb(repo, monkeypatch)
+    before = {p: (repo / p).read_bytes() for p in MACHINERY}
+    assert runner.run(repo, cfg, "commit") == 0
+    assert git(repo, "show", "--name-only", "--format=", "HEAD").split() == ["docs/kb/index.md"]
+    assert {p: (repo / p).read_bytes() for p in MACHINERY} == before
+    assert git(repo, "status", "--porcelain", "--untracked-files=no") == ""
+    report = (state(repo) / "reports/latest.md").read_text()
+    assert "## Ignored (outside owned paths, discarded)\n" + "".join(f"- {p}\n" for p in IGNORED) in report
+    assert ".claude/agents/x.md" not in git(repo, "ls-files") and not (repo / ".claude/agents/x.md").exists()
+
+
+def test_reviewer_sees_head_instructions(repo, monkeypatch):
+    cfg = machinery_kb(repo, monkeypatch)
+    seen, call = [], runner._call_model
+
+    def spy(role, prompt, cwd, cfg, reason):
+        if role == "reviewer":
+            seen.append({p: (cwd / p).read_bytes() for p in MACHINERY})
+            assert not (cwd / ".claude/settings.local.json").exists() and not (cwd / ".claude/agents/x.md").exists()
+        return call(role, prompt, cwd, cfg, reason)
+
+    monkeypatch.setattr(runner, "_call_model", spy)
+    assert runner.run(repo, cfg, "commit") == 0
+    assert seen == [{p: git(repo, "show", f"HEAD~1:{p}").encode() for p in MACHINERY}]
+    prompt = (state(repo) / "fake_review_prompt").read_text()
+    head_text = git(repo, "show", "HEAD:.libraryan/agents/libraryan-reviewer.md").rstrip()
+    assert prompt.startswith(head_text) and "TAMPERED" not in prompt
+
+
+def test_author_branch_checkout_in_worktree_never_moves_the_branch(repo, monkeypatch):
+    cfg = make_kb(repo)
+    commit_request(repo)
+    git(repo, "branch", "x", "HEAD~1")
+    tip = git(repo, "rev-parse", "x")
+
+    def switch(role, prompt, cwd, cfg, reason):
+        if role == "author":
+            git(cwd, "checkout", "-q", "x")
+            with open(cwd / "docs/kb/index.md", "a") as f:
+                f.write("- note\n")
+        return "APPROVE" if role == "reviewer" else "SUMMARY ok\n", [], {}
+
+    monkeypatch.setattr(runner, "_call_model", switch)
+    assert runner.run(repo, cfg, "commit") == 0
+    assert git(repo, "rev-parse", "x") == tip and libraryan_commits(repo)
+
+
+def test_interrupt_during_commit_leaves_nothing_staged(repo, monkeypatch):
+    cfg = make_kb(repo)
+    add_request(repo)
+
+    def half_commit(root, paths, reason, output):
+        git(root, "add", "-A", "--", *paths)
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(runner, "_commit", half_commit)
+    with pytest.raises(KeyboardInterrupt):
+        runner.run(repo, cfg, "manual")
+    assert git(repo, "diff", "--cached", "--name-only") == ""
+    assert (repo / "docs/kb/index.md").read_text() == "# Index\n"
+
+
+def test_ignored_list_capped_in_report(tmp_path):
+    work = {"requests": [], "since": None, "commits": 0, "health": False}
+    (tmp_path / "reports").mkdir()
+    runner._report(tmp_path, "manual", work, [], [], "", ignored=[f"src/f{i}.py" for i in range(250)])
+    text = (tmp_path / "reports/latest.md").read_text()
+    assert "- src/f199.py\n- 50 more in src/" in text and "f200" not in text

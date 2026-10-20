@@ -1,8 +1,7 @@
-"""Independent reviewer: the runner's final gate, a separate read-only `claude -p` run with a runner-built prompt."""
+"""Independent reviewer: the runner's final gate, a separate read-only model session with a runner-built prompt."""
 import secrets
 import time
 
-REVIEW_TOOLS = "Read,Glob,Grep,Bash(git diff:*),Bash(git show:*),Bash(git log:*),Bash(git status:*)"
 MODIFIED = "review: reviewer modified files"
 
 
@@ -43,17 +42,11 @@ def parse_verdict(text: str) -> tuple[bool, list[str]]:
 
 def run_review(root, cfg, reason, changed, work, ledger_lines, call_model, snapshot) -> tuple[list[str], dict]:
     """(problems, usage) of one reviewer call; any failure, edit or non-APPROVE answer is a problem."""
-    cmd = [cfg["claude_bin"], "-p", "--agent", "libraryan-reviewer", "--permission-mode", "default",
-           "--allowedTools", REVIEW_TOOLS,
-           "--max-budget-usd", str(cfg["max_usd_review_setup" if reason == "setup" else "max_usd_review"])]
-    if cfg.get("reviewer_model") or cfg.get("model"):
-        cmd += ["--model", cfg.get("reviewer_model") or cfg["model"]]
     before = snapshot(root, cfg)
-    text, problems, usage = call_model([*cmd, build_prompt(reason, changed, work, ledger_lines, cfg)], root,
-                                       cfg["setup_timeout_minutes" if reason == "setup" else "review_timeout_minutes"] * 60)
+    text, problems, usage = call_model("reviewer", build_prompt(reason, changed, work, ledger_lines, cfg), root, cfg,
+                                       reason)
     from .runner import _libraryan_changes
-    # ponytail: can't tell the reviewer from another agent editing meanwhile; the runner reports these paths
-    # and treats it as transient, never restores them (baseline and new requests are excluded outright)
+    # it runs in the run's worktree, where only the reviewer can edit: any change is its own, a plain failure
     baseline = set(work.get("baseline", []))
     delta = [p for p in _libraryan_changes(before, snapshot(root, cfg)) if p not in baseline]
     if delta:

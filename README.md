@@ -77,7 +77,7 @@ Linux or macOS with:
 | Python 3.10+ | `python3 --version` | your package manager |
 | pipx | `pipx --version` | Debian/Ubuntu: `sudo apt install pipx && pipx ensurepath`; macOS: `brew install pipx && pipx ensurepath` |
 | git 2.34+ | `git --version` | your package manager |
-| Claude Code 2.1+, logged in | `claude --version` | [Claude Code setup](https://docs.anthropic.com/en/docs/claude-code/setup) |
+| One agent CLI, logged in: Claude Code, Codex, Gemini, Qwen, Copilot, OpenCode or Cursor (others via a custom command) | e.g. `claude --version` | [Runtimes](https://github.com/narek-mn/libraryan/blob/main/docs/guide.md#runtimes) lists the install and login for each |
 | cron | `crontab -l` | usually preinstalled |
 | [gitleaks](https://github.com/gitleaks/gitleaks) (optional) | `gitleaks version` | secret scanning |
 </details>
@@ -154,13 +154,24 @@ Rebuild the demo yourself: [`examples/demo`](https://github.com/narek-mn/library
 |---|---|
 | It deletes something important | A deleted doc must be a pure move, or the run must quote where each fact went. Quotes are checked mechanically, otherwise the deletion is restored. Git keeps everything. |
 | It hallucinates | Every commit passes a second agent that sees the diff, not the author's reasoning, and **fails closed**. |
-| It touches my code | It writes only paths it owns. Anything else is restored, and code issues go into the report. |
+| It touches my code | It works in a throwaway copy of the repo; only owned docs come back. Anything else is discarded, and code issues go into the report. |
 | It leaks a secret into docs | It is told never to copy secrets, and an optional gitleaks scan runs on every run. |
-| It burns money | `--max-budget-usd` on every call, plus daily caps on runs, commits and failure streaks. Quiet nights skip the model entirely. |
+| It burns money | Claude Code calls get `--max-budget-usd`; other runtimes get a time limit and, where the tool has one, a turn cap. Every runtime gets daily caps on runs, commits and failure streaks. Quiet nights skip the model entirely. |
 | Other agents treat a request as a command | Request files are data, never instructions. |
 | I want it gone | `libraryan uninstall` removes hooks, cron and the agent in one commit. Your docs stay. |
 
-Honest limits: Libraryan's own writer and reviewer run through Claude Code today; more runtimes (Codex CLI, Gemini CLI) are planned. Linux and macOS only. The lock is a guardrail, not a security boundary (`git commit --no-verify` skips it). See [Known limits](https://github.com/narek-mn/libraryan/blob/main/docs/guide.md#known-limits).
+Honest limits: non-Claude runtimes are experimental until each has had a real smoke run (see the [guide](https://github.com/narek-mn/libraryan/blob/main/docs/guide.md#runtimes)). A few runtimes cannot restrict shell commands per run. Files in the repo are protected by the throwaway copy and the owned-paths-only copy-back, and a pre-push hook blocks pushes while a run is active; but a runtime with unrestricted shell could still touch files outside the repo or run other commands, so run those only on machines and accounts you trust. Linux and macOS only. The lock is a guardrail, not a security boundary (`git commit --no-verify` skips it). See [Known limits](https://github.com/narek-mn/libraryan/blob/main/docs/guide.md#known-limits).
+
+## Runtimes
+
+The writer and the reviewer each run on an agent CLI. `libraryan init` picks one it finds (or use `--runtime NAME`); `libraryan runtime` shows and switches it.
+
+| Runtime | Status | Cost in reports |
+|---|---|---|
+| Claude Code | stable | USD |
+| Codex, Gemini, Qwen, Copilot, Cursor | experimental | unknown |
+| OpenCode | experimental | USD when the tool reports it, else unknown |
+| Any CLI via `runtime_command` | experimental | unknown |
 
 ## Commands
 
@@ -168,6 +179,7 @@ Honest limits: Libraryan's own writer and reviewer run through Claude Code today
 |---|---|
 | `libraryan init` | Install into this repo and build the knowledge base |
 | `libraryan run` | Run now |
+| `libraryan runtime` | Show the agent CLIs in use and found; `libraryan runtime NAME [--reviewer]` switches |
 | `libraryan audit` | Docs-vs-code audit, no model call |
 | `libraryan stats` | Runs, commits, failures and cost per day |
 | `libraryan check` | Lint docs and scan for secrets |
@@ -185,12 +197,12 @@ Because every agent then writes docs in its own style, at its own time, without 
 
 <details><summary><b>What does it cost?</b></summary>
 
-You pay for your own model usage. A run happens only after commits, on request, or when the daily audit finds something. Quiet days are free. Hard caps apply per call (default $5 for a run, $25 for the first setup) and per day. `libraryan stats` shows the real spend.
+You pay for your own model usage. A run happens only after commits, on request, or when the daily audit finds something. Quiet days are free. On Claude Code, hard caps apply per call (default $5 for a run, $25 for the first setup); other runtimes are bounded by a time limit and, where the tool has one, a turn cap. Daily caps apply to every runtime. `libraryan stats` shows the real spend.
 </details>
 
 <details><summary><b>Does it work with Cursor, Copilot, Gemini or Codex agents?</b></summary>
 
-Yes. The git pre-commit hook rejects any tool's commits to owned docs, the request rules are written into `AGENTS.md`, which those agents read, and the knowledge base is plain Markdown any model can use. Libraryan's own writer runs through Claude Code today; other runtimes are planned.
+Yes. The git pre-commit hook rejects any tool's commits to owned docs, the request rules are written into `AGENTS.md`, which those agents read, and the knowledge base is plain Markdown any model can use. Libraryan's own writer and reviewer run on Claude Code, Codex, Gemini, Qwen, Copilot, OpenCode or Cursor (or any CLI through a custom command); the non-Claude ones are experimental until smoke-tested.
 </details>
 
 <details><summary><b>Will it push or open PRs?</b></summary>

@@ -9,7 +9,11 @@ DEFAULTS = {
     "kb_root": "docs/kb",
     "default_branch": "main",
     "runner_host": "",
-    "claude_bin": "claude",
+    "runtime": "claude",
+    "runtime_bin": None,
+    "reviewer_runtime": None,
+    "reviewer_runtime_bin": None,
+    "runtime_command": None,
     "model": None,
     "debounce_minutes": 10,
     "run_timeout_minutes": 30,
@@ -18,6 +22,9 @@ DEFAULTS = {
     "max_usd_setup": 25,
     "max_usd_review": 2,
     "max_usd_review_setup": 10,
+    "max_turns_run": 60,
+    "max_turns_setup": 200,
+    "max_turns_review": 30,
     "independent_review": True,
     "reviewer_model": None,
     "review_timeout_minutes": 15,
@@ -37,7 +44,10 @@ def load(root: Path) -> dict:
     cfg = copy.deepcopy(DEFAULTS)
     p = Path(root) / CONFIG_PATH
     if p.exists():
-        cfg.update(json.loads(p.read_text()))
+        stored = json.loads(p.read_text())
+        old = stored.pop("claude_bin", None)  # 0.2.x name
+        cfg.update(stored)
+        cfg["runtime_bin"] = cfg["runtime_bin"] or old
     return cfg
 
 

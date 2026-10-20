@@ -138,3 +138,32 @@ def test_precommit_blocks_commit_all(repo):
     (repo / "README.md").write_text("# changed\n")
     r = git(repo, "commit", "-a", "-m", "x", check=False)
     assert r.returncode != 0 and "README.md" in r.stderr
+
+
+def _push_setup(repo):
+    install_runtime(repo)
+    bare = repo.parent / (repo.name + "-remote.git")
+    subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True)
+    git(repo, "remote", "add", "origin", str(bare))
+    return bare
+
+
+def test_pre_push_refused_during_run(repo):
+    bare = _push_setup(repo)
+    r = git(repo, "push", "origin", "main", env={"LIBRARYAN": "1"}, check=False)
+    assert r.returncode != 0 and "pushing is not allowed during a Libraryan run" in r.stderr
+    assert git(bare, "rev-parse", "--verify", "refs/heads/main", check=False).returncode != 0
+
+
+def test_pre_push_chains_user_hook(repo):
+    bare = _push_setup(repo)
+    hook = repo / ".git/hooks/pre-push"
+    hook.write_text("#!/bin/sh\ncat > \"$(dirname \"$0\")/stdin\"\necho \"$1\" >&2\nexit 1\n")
+    hook.chmod(0o755)
+    env = {k: v for k, v in os.environ.items() if k != "LIBRARYAN"}
+    r = subprocess.run(["git", "push", "origin", "main"], cwd=repo, capture_output=True, text=True, env=env)
+    assert r.returncode != 0 and "origin" in r.stderr
+    assert "refs/heads/main" in (repo / ".git/hooks/stdin").read_text()
+    assert git(bare, "rev-parse", "--verify", "refs/heads/main", check=False).returncode != 0
+    hook.write_text("#!/bin/sh\nexit 0\n")
+    assert subprocess.run(["git", "push", "origin", "main"], cwd=repo, capture_output=True, env=env).returncode == 0

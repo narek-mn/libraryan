@@ -1,0 +1,61 @@
+# Loaded with `gemini --policy` (User tier, outranks the built-in rules). Headless mode denies whatever no rule allows.
+
+[[rule]]
+toolName = "run_shell_command"
+commandPrefix = "git log"
+decision = "allow"
+priority = 100
+
+[[rule]]
+toolName = "run_shell_command"
+commandPrefix = "git diff"
+decision = "allow"
+priority = 100
+
+[[rule]]
+toolName = "run_shell_command"
+commandPrefix = "git show"
+decision = "allow"
+priority = 100
+
+[[rule]]
+toolName = "run_shell_command"
+commandPrefix = "git status"
+decision = "allow"
+priority = 100
+
+[[rule]]
+toolName = "run_shell_command"
+commandPrefix = "python3 .libraryan/bin/libraryan check"
+decision = "allow"
+priority = 100
+
+[[rule]]
+toolName = "run_shell_command"
+commandPrefix = "python3 .libraryan/bin/libraryan audit"
+decision = "allow"
+priority = 100
+
+# Deleting, moving and creating folders: relative paths without `..` only, no shell syntax (\x27 is a quote).
+# Matched against the JSON arguments after `"command":"`, so the closing `"` ends the whole command.
+[[rule]]
+toolName = "run_shell_command"
+commandRegex = '(rm|mv|mkdir -p|git rm|git mv)( (-[A-Za-z-]*|(?![^ "]*\.\.)[^-/~ "\\\x27;&|<>`$(){}*?!#][^ "\\\x27;&|<>`$(){}*?!#]*))+"'
+decision = "allow"
+priority = 100
+
+[[rule]]
+toolName = "run_shell_command"
+commandRegex = "git (add|commit|push|checkout)"
+decision = "deny"
+priority = 900
+denyMessage = "Libraryan commits, not the agent"
+
+# No shell file writes or outside reads: git log/diff/show --output writes files, --no-index reads outside the repo;
+# a quote, backslash, `$` or backtick inside an option name could spell either one.
+[[rule]]
+toolName = "run_shell_command"
+commandRegex = '(?:[^"\\]|\\.)*?(--output|--no-index|--[A-Za-z-]*(?:[\x27$`]|\\))'
+decision = "deny"
+priority = 900
+denyMessage = "Libraryan: no --output or --no-index"

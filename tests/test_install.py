@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from helpers import fake_tools
 from libraryan import __version__, config, install, runner
 
 SRC = Path(install.__file__).resolve().parent  # the package dir: package data lives in it
@@ -32,7 +33,7 @@ def test_init_installs_and_commits(repo, fake_crontab):
     assert install.init(repo, SRC, run_setup=False) == 0
     for p in (".libraryan/bin/libraryan", ".libraryan/hooks/pre-commit", ".libraryan/libraryan/cli.py",
               ".libraryan/config.json", ".libraryan/requests/.gitkeep", ".libraryan/templates/STYLE.md", ".libraryan/templates/agents-block.md",
-              ".claude/agents/libraryan.md", ".claude/agents/libraryan-reviewer.md",
+              ".claude/agents/libraryan.md", ".claude/agents/libraryan-reviewer.md", ".libraryan/agents/libraryan.md", ".libraryan/agents/libraryan-reviewer.md",
               ".claude/skills/libraryan-request/SKILL.md"):
         assert (repo / p).is_file(), p
     assert os.access(repo / ".libraryan/hooks/pre-commit", os.X_OK)
@@ -84,10 +85,94 @@ def test_settings_merge_preserves_existing(repo):
     assert settings(repo) == {"model": "x", "hooks": {"PreToolUse": [mine]}}
 
 
-def test_merge_and_strip_settings_roundtrip():
-    s = install.merge_settings({})
-    assert install.merge_settings(s) == s
-    assert install.strip_settings(s) == {}
+def test_merge_and_strip_hooks_roundtrip():
+    for hooks in install.HOOK_FILES.values():
+        s = install.merge_hooks({}, hooks)
+        assert install.merge_hooks(s, hooks) == s
+        assert install.strip_hooks(s) == {}
+
+
+def test_init_writes_every_guard_file(repo):
+    assert install.init(repo, SRC, run_setup=False) == 0
+    load = lambda p: json.loads((repo / p).read_text())
+    assert load(".claude/settings.json")["hooks"]["PreToolUse"][0]["hooks"][0]["command"] == install.GUARD_CMD
+    codex = load(".codex/hooks.json")["hooks"]
+    assert codex["PreToolUse"][0]["matcher"] == "Edit|Write|apply_patch|Bash"
+    assert codex["SessionStart"][0]["hooks"][0]["command"] == install.ENSURE_CMD
+    gemini = load(".gemini/settings.json")
+    assert gemini["hooks"]["BeforeTool"][0]["matcher"] == "write_file|replace" and "SessionStart" in gemini["hooks"]
+    assert gemini["context"]["fileName"] == ["AGENTS.md", "GEMINI.md"]
+    assert load(".qwen/settings.json")["hooks"]["PreToolUse"][0]["matcher"] == "write_file|edit|Write|Edit"
+    assert load(".cursor/hooks.json") == {"version": 1, "hooks": {
+        "preToolUse": [{"command": install.GUARD_CMD, "matcher": "Write|Edit|Delete"}],
+        "sessionStart": [{"command": install.ENSURE_CMD}]}}
+    js = (repo / ".opencode/plugins/libraryan.js").read_text()
+    assert install.MARK in js and all(f'"{t}"' in js for t in ("edit", "write", "patch"))
+    assert json.dumps(install.GUARD_CMD) in js
+    assert sorted(config.load(repo)["created_files"]) == sorted(install.HOOK_FILES)
+    assert git(repo, "status", "--porcelain").stdout == ""
+
+
+def test_existing_hook_files_merged_not_overwritten(repo):
+    mine = {"matcher": "run_shell_command", "hooks": [{"type": "command", "command": "echo mine"}]}
+    user = {"context": {"fileName": "CONTEXT.md"}, "hooks": {"BeforeTool": [mine]}}
+    (repo / ".gemini").mkdir()
+    (repo / ".gemini/settings.json").write_text(json.dumps(user))
+    git(repo, "add", ".gemini")
+    git(repo, "commit", "-m", "gemini")
+    assert install.init(repo, SRC, run_setup=False) == 0
+    s = json.loads((repo / ".gemini/settings.json").read_text())
+    assert s["context"] == {"fileName": "CONTEXT.md"} and s["hooks"]["BeforeTool"][0] == mine
+    assert len(s["hooks"]["BeforeTool"]) == 2
+    assert ".gemini/settings.json" not in config.load(repo)["created_files"]
+    install.uninstall(repo)
+    assert json.loads((repo / ".gemini/settings.json").read_text()) == user
+
+
+def test_upgrade_replaces_old_claude_project_dir_hook(repo):
+    install.init(repo, SRC, run_setup=False)
+    old = {"hooks": {
+        "PreToolUse": [{"matcher": "Edit|Write|MultiEdit|NotebookEdit|apply_patch", "hooks": [
+            {"type": "command", "command": 'python3 "$CLAUDE_PROJECT_DIR"/.libraryan/bin/libraryan guard'}]}],
+        "SessionStart": [{"hooks": [
+            {"type": "command", "command": 'python3 "$CLAUDE_PROJECT_DIR"/.libraryan/bin/libraryan ensure-hooks'}]}]}}
+    (repo / ".claude/settings.json").write_text(json.dumps(old))
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "old hooks", env={"LIBRARYAN": "1"})
+    assert install.upgrade(repo, SRC) == 0
+    s = settings(repo)
+    assert s == install.merge_hooks({}, install.HOOK_FILES[".claude/settings.json"])
+    assert git(repo, "status", "--porcelain").stdout == ""
+
+
+def test_uninstall_removes_created_hook_files_keeps_user_ones(repo):
+    (repo / ".cursor").mkdir()
+    (repo / ".cursor/hooks.json").write_text('{"version": 1}\n')
+    git(repo, "add", ".cursor")
+    git(repo, "commit", "-m", "cursor")
+    install.init(repo, SRC, run_setup=False)
+    assert install.uninstall(repo) == 0
+    for p in (".claude/settings.json", ".codex/hooks.json", ".gemini/settings.json", ".qwen/settings.json",
+              ".opencode/plugins/libraryan.js"):
+        assert not (repo / p).exists(), p
+    assert json.loads((repo / ".cursor/hooks.json").read_text()) == {"version": 1}
+    assert git(repo, "status", "--porcelain").stdout == ""
+
+
+def test_invalid_codex_hooks_json_refuses_init(repo, capsys):
+    (repo / ".codex").mkdir()
+    (repo / ".codex/hooks.json").write_text("{not json")
+    git(repo, "add", ".codex")
+    git(repo, "commit", "-m", "codex")
+    assert install.init(repo, SRC, run_setup=False) == 1
+    assert ".codex/hooks.json" in capsys.readouterr().err
+    assert git(repo, "status", "--porcelain", "--ignored").stdout == ""
+
+
+def test_init_prints_teammates_note(repo, capsys):
+    install.init(repo, SRC, run_setup=False)
+    out = capsys.readouterr().out
+    assert "Teammates' tools" in out and "/hooks" in out
 
 
 def test_uninstall_deletes_settings_only_if_created(repo):
@@ -120,12 +205,12 @@ def test_init_refuses_off_default_branch(repo):
     assert not (repo / ".libraryan").exists()
 
 
-def test_init_without_claude_needs_no_setup(repo, monkeypatch):
-    monkeypatch.setattr(install.shutil, "which", lambda name: None)
+def test_init_without_claude_needs_no_setup(repo, monkeypatch, tmp_path):
+    fake_tools(monkeypatch, tmp_path)
     assert install.init(repo, SRC) != 0
     assert not (repo / ".libraryan").exists()
     assert install.init(repo, SRC, run_setup=False) == 0
-    assert config.load(repo)["claude_bin"] == "claude"
+    assert config.load(repo)["runtime_bin"] is None
 
 
 def test_init_then_doc_edit_blocked(repo):
@@ -214,7 +299,7 @@ def test_init_with_setup_runs_runner_with_installer_files(repo, monkeypatch):
     git(repo, "add", "docs")
     git(repo, "commit", "-m", "kb")
     monkeypatch.setattr(install.shutil, "which", lambda name: str(FAKE) if name == "claude" else None)
-    assert install.init(repo, SRC) == 0
+    assert install.init(repo, SRC, runtime="claude") == 0
     assert git(repo, "log", "-2", "--format=%s").stdout.split("\n")[:2] == [
         "docs(libraryan): setup run", "docs(libraryan): install"]
     installed = git(repo, "show", "--name-only", "--format=", "HEAD~1").stdout.split()
@@ -253,7 +338,7 @@ def test_runner_never_commits_baseline_paths(repo, monkeypatch):
     git(repo, "add", "-A")
     git(repo, "commit", "-m", "kb", env={"LIBRARYAN": "1"})
     (repo / "docs/kb/index.md").write_text("# Index\n- other agent wip\n")  # baseline, fake claude edits it
-    cfg = {**config.load(repo), "claude_bin": str(FAKE)}
+    cfg = {**config.load(repo), "runtime_bin": str(FAKE)}
     assert runner.run(repo, cfg, "manual") == 0
     assert subject(repo) == "kb"  # the only change was to a baseline path: nothing committed
     assert "other agent wip" in (repo / "docs/kb/index.md").read_text()
@@ -416,7 +501,7 @@ def test_init_claude_md_symlink(repo, link, target):
 
 def test_init_setup_failure_prints_retry_hint(repo, monkeypatch, capsys):
     monkeypatch.setattr(install.shutil, "which", lambda name: "/nonexistent/claude" if name == "claude" else None)
-    assert install.init(repo, SRC) == 1
+    assert install.init(repo, SRC, runtime="claude") == 1
     assert subject(repo) == "docs(libraryan): install"
     assert "run --reason setup" in capsys.readouterr().err
 
@@ -471,7 +556,7 @@ def test_global_hooks_path_ignored(repo, tmp_path, monkeypatch):
 
 def test_init_announces_setup(repo, monkeypatch, capsys):
     monkeypatch.setattr(install.shutil, "which", lambda name: "/nonexistent/claude" if name == "claude" else None)
-    install.init(repo, SRC)
+    install.init(repo, SRC, runtime="claude")
     assert ("Setup running (can take up to 120 minutes); report: .libraryan/state/reports/latest.md"
             in capsys.readouterr().out)
 
@@ -535,3 +620,14 @@ def test_upgrade_from_read_only_package(repo, tmp_path_factory):
     finally:
         for p in paths:
             p.chmod(p.stat().st_mode | stat.S_IWUSR)
+
+
+def test_uninstall_with_invalid_hook_file_changes_nothing(repo, fake_crontab):
+    install.init(repo, SRC, run_setup=False)
+    (repo / ".gemini/settings.json").write_text("{not json")
+    git(repo, "commit", "-qam", "broken", env={"LIBRARYAN": "1"})
+    cron = fake_crontab.read_text()
+    assert install.uninstall(repo) == 1
+    assert git(repo, "config", "core.hooksPath").stdout.strip() == install.HOOKS_PATH
+    assert fake_crontab.read_text() == cron and START in (repo / "AGENTS.md").read_text()
+    assert (repo / ".libraryan").is_dir() and git(repo, "status", "--porcelain").stdout == ""

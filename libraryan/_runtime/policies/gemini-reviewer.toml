@@ -1,0 +1,46 @@
+# Loaded with `gemini --policy` (User tier, outranks the built-in rules). Headless mode denies whatever no rule allows.
+
+[[rule]]
+toolName = "run_shell_command"
+commandPrefix = "git log"
+decision = "allow"
+priority = 100
+
+[[rule]]
+toolName = "run_shell_command"
+commandPrefix = "git diff"
+decision = "allow"
+priority = 100
+
+[[rule]]
+toolName = "run_shell_command"
+commandPrefix = "git show"
+decision = "allow"
+priority = 100
+
+[[rule]]
+toolName = "run_shell_command"
+commandPrefix = "git status"
+decision = "allow"
+priority = 100
+
+[[rule]]
+toolName = "write_file"
+decision = "deny"
+priority = 900
+denyMessage = "Libraryan reviewers are read-only"
+
+[[rule]]
+toolName = "replace"
+decision = "deny"
+priority = 900
+denyMessage = "Libraryan reviewers are read-only"
+
+# No shell file writes or outside reads: git log/diff/show --output writes files, --no-index reads outside the repo;
+# a quote, backslash, `$` or backtick inside an option name could spell either one.
+[[rule]]
+toolName = "run_shell_command"
+commandRegex = '(?:[^"\\]|\\.)*?(--output|--no-index|--[A-Za-z-]*(?:[\x27$`]|\\))'
+decision = "deny"
+priority = 900
+denyMessage = "Libraryan: no --output or --no-index"

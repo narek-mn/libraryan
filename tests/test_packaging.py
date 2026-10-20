@@ -56,7 +56,7 @@ def test_wheel_contents(wheel):
         names = set(z.namelist())
         eps = next(z.read(n).decode() for n in names if n.endswith(".dist-info/entry_points.txt"))
     for n in ("libraryan/_runtime/bin/libraryan", "libraryan/_runtime/hooks/pre-commit",
-              "libraryan/_runtime/hooks/post-commit", "libraryan/_templates/agents/libraryan.md",
+              "libraryan/_runtime/hooks/post-commit", "libraryan/_runtime/policies/gemini-author.toml", "libraryan/_templates/agents/libraryan.md",
               "libraryan/_templates/skills/libraryan-request/SKILL.md", "libraryan/cli.py"):
         assert n in names, n
     assert not any(n.startswith(("tests/", "docs/")) for n in names)

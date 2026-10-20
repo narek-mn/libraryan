@@ -3,22 +3,9 @@ import json
 import time
 from pathlib import Path
 
-_USAGE = {"total_cost_usd": "cost_usd", "num_turns": "turns", "duration_ms": "duration_ms", "is_error": "is_error"}
-
 
 def _ts() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-
-
-def parse_output(stdout: str) -> tuple[str, dict]:
-    """(text, usage) from `--output-format json` stdout; anything else is plain text with no usage."""
-    try:
-        d = json.loads(stdout)
-    except ValueError:
-        return stdout, {}
-    if not isinstance(d, dict):
-        return stdout, {}
-    return d["result"] if isinstance(d.get("result"), str) else "", {v: d[k] for k, v in _USAGE.items() if k in d}
 
 
 def append(st: Path, record: dict) -> None:
@@ -56,9 +43,11 @@ def stats(st: Path, days: int = 7) -> str:
     per: dict[str, list[dict]] = {}
     for r in read(st, since):
         per.setdefault(r["ts"][:10], []).append(r)
+    calls = lambda rs: [c for r in rs for c in r.get("calls") or []]
+    unknown = lambda rs: sum(c.get("cost_usd") is None for c in calls(rs))
     return "\n".join(
-        f"{d} runs={len(rs)} calls={sum(len(r.get('calls') or []) for r in rs)} "
+        f"{d} runs={len(rs)} calls={len(calls(rs))} "
         f"commits={sum(r.get('outcome') == 'committed' for r in rs)} "
         f"failures={sum(r.get('outcome') == 'failed' for r in rs)} "
-        f"cost=${sum(c.get('cost_usd') or 0 for r in rs for c in r.get('calls') or []):.2f}"
+        f"cost=${sum(c.get('cost_usd') or 0 for c in calls(rs)):.2f}" + (f" unknown={unknown(rs)}" if unknown(rs) else "")
         for d, rs in sorted(per.items()))

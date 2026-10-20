@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "libraryan"
-version = "0.2.2"
+version = "0.3.0"
 description = "A vendor-neutral docs agent: the only writer of a git project's Markdown knowledge base; every other agent files a request"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -39,7 +39,7 @@ Changelog = "https://github.com/narek-mn/libraryan/blob/main/CHANGELOG.md"
 libraryan = "libraryan.cli:entry"
 
 [tool.setuptools]
-packages = ["libraryan"]
+packages = ["libraryan", "libraryan.runtimes"]
 
 [tool.setuptools.package-data]
 libraryan = ["_runtime/**/*", "_templates/**/*"]

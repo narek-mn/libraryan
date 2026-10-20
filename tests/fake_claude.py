@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Stand-in for `claude` in runner tests: edits the KB and prints a summary.
 
-FAKE_CLAUDE_MODE (comma-separated) adds misbehaviour/races for specific tests."""
+FAKE_CLAUDE_MODE (comma-separated) adds misbehaviour/races for specific tests. The runner starts it in a
+worktree; markers and other agents' actions go to the real checkout (REAL)."""
 import json
 import os
 import subprocess
@@ -9,31 +10,39 @@ import sys
 import time
 from pathlib import Path
 
+if "--version" in sys.argv:
+    print("9.9.9 (Fake)")
+    sys.exit(0)
 modes = os.environ.get("FAKE_CLAUDE_MODE", "").split(",")
+REAL = Path(subprocess.check_output(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                                   text=True).strip()).parent
+ST = REAL / ".libraryan/state"
 if "--agent" in sys.argv and sys.argv[sys.argv.index("--agent") + 1] == "libraryan-reviewer":
-    Path(".libraryan/state/fake_review_argv").write_text(json.dumps(sys.argv))
-    Path(".libraryan/state/fake_review_prompt").write_text(sys.argv[-1])
+    (ST / "fake_review_argv").write_text(json.dumps(sys.argv))
+    (ST / "fake_review_prompt").write_text(sys.argv[-1])
     if "review_edits" in modes:
         with open("docs/kb/index.md", "a") as f:
             f.write("- edited by fake reviewer\n")
     if "review_newdoc" in modes:  # another agent writes a doc during the review
-        Path("docs/other.md").write_text("another agent\n")
+        (REAL / "docs/other.md").write_text("another agent\n")
     if "review_request" in modes:
-        Path(".libraryan/requests/other-agent.md").write_text("during review\n")
+        (REAL / ".libraryan/requests/other-agent.md").write_text("during review\n")
     if "review_baseline" in modes:
-        with open("docs/wip.md", "a") as f:
+        with open(REAL / "docs/wip.md", "a") as f:
             f.write("more wip\n")
     if "review_fail" in modes:
         sys.exit(1)
     print(json.dumps({"type": "result", "result": os.environ.get("FAKE_REVIEW", "APPROVE"), "total_cost_usd": 0.01,
                       "num_turns": 1, "duration_ms": 10, "is_error": "review_is_error" in modes}))
     sys.exit(0)
-Path(".libraryan/state/fake_claude_ran").write_text("")
-Path(".libraryan/state/fake_claude_prompt").write_text(sys.argv[-1])
+(ST / "fake_claude_ran").write_text("")
+(ST / "fake_claude_prompt").write_text(sys.argv[-1])
+(ST / "fake_claude_cwd").write_text(os.getcwd())
 if "exit1" in modes:  # the model fails before touching anything
     sys.exit(1)
 if "argv" in modes:
-    Path(".libraryan/state/fake_claude_argv").write_text(json.dumps(sys.argv))
+    (ST / "fake_claude_argv").write_text(json.dumps(sys.argv))
+Path("docs/kb").mkdir(parents=True, exist_ok=True)
 with open("docs/kb/index.md", "a") as f:
     f.write("- updated by fake claude\n")
 if "badnote" in modes:
@@ -45,16 +54,21 @@ if "unicode" in modes:
 if "race_request" in modes:  # consume pending requests, while another agent writes a new one
     for p in Path(".libraryan/requests").glob("*.md"):
         p.unlink()
-    Path(".libraryan/requests/other-agent.md").write_text("in progress\n")
+    (REAL / ".libraryan/requests/other-agent.md").write_text("in progress\n")
 if "stage_request" in modes:  # another agent stages a fresh request during the run
-    Path(".libraryan/requests/other-agent.md").write_text("staged\n")
-    subprocess.run(["git", "add", ".libraryan/requests/other-agent.md"], check=True)
+    (REAL / ".libraryan/requests/other-agent.md").write_text("staged\n")
+    subprocess.run(["git", "add", ".libraryan/requests/other-agent.md"], cwd=REAL, check=True)
 if "commit" in modes:  # another agent commits code during the run
-    Path("src.py").write_text("x = 1\n")
-    subprocess.run(["git", "add", "src.py"], check=True)
-    subprocess.run(["git", "commit", "-qm", "code"], check=True)
+    (REAL / "src.py").write_text("x = 1\n")
+    subprocess.run(["git", "add", "src.py"], cwd=REAL, check=True)
+    subprocess.run(["git", "commit", "-qm", "code"], cwd=REAL, check=True)
 if "checkout" in modes:  # another agent switches branch during the run
-    subprocess.run(["git", "checkout", "-qb", "feature"], check=True)
+    subprocess.run(["git", "checkout", "-qb", "feature"], cwd=REAL, check=True)
+if "real_doc_edit" in modes:  # another agent edits an owned doc in the real checkout during the run
+    with open(REAL / "docs/kb/index.md", "a") as f:
+        f.write("- by another agent\n")
+if "edit_wip" in modes:  # the agent edits a doc that is baseline (the user's work in progress) in the checkout
+    Path("docs/wip.md").write_text("agent's wip\n")
 if "sleep" in modes:
     time.sleep(5)
 if "gitrm" in modes:  # processed request deleted the way the agent does it
@@ -75,11 +89,11 @@ if "codeedit" in modes:  # the agent strays into code
     Path("app.py").write_text("x = 2\n")
     subprocess.run(["git", "rm", "-q", "--", "util.py"], check=True)
 if "env" in modes:
-    Path(".libraryan/state/fake_claude_env").write_text("\n".join(sorted(os.environ)))
+    (ST / "fake_claude_env").write_text("\n".join(sorted(os.environ)))
 if "spawn" in modes:  # a tool subprocess that outlives a killed parent unless the group is killed
     child = subprocess.Popen(["sleep", "30"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                              stderr=subprocess.DEVNULL)
-    Path(".libraryan/state/fake_claude_child").write_text(str(child.pid))
+    (ST / "fake_claude_child").write_text(str(child.pid))
     time.sleep(30)
 discard = []
 if "discard" in modes:  # reviewer rejected a new note

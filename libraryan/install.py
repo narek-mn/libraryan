@@ -10,7 +10,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import __version__, config, gitutil, precommit, runner
+from . import __version__, config, gitutil, precommit, runner, runtimes
 from .paths import is_protected
 
 PKG = Path(__file__).resolve().parent  # the package, with its data in _runtime/ and _templates/
@@ -18,40 +18,87 @@ crontab_cmd = "crontab"  # tests patch this to a fake; tests never touch the rea
 MARK = ".libraryan/bin/libraryan"
 HOOKS_PATH = ".libraryan/hooks"
 START, END = "<!-- libraryan:start -->", "<!-- libraryan:end -->"
-SETTINGS = {"hooks": {
-    "PreToolUse": [{"matcher": "Edit|Write|MultiEdit|NotebookEdit|apply_patch",
-                    "hooks": [{"type": "command", "command": f'python3 "$CLAUDE_PROJECT_DIR"/{MARK} guard'}]}],
-    "SessionStart": [{"hooks": [{"type": "command",
-                                 "command": f'python3 "$CLAUDE_PROJECT_DIR"/{MARK} ensure-hooks'}]}],
-}}
+# a nested repo or submodule has no Libraryan: its hooks must pass, not fail on a missing script
+_HOOK = 'p="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}/%s"; [ -f "$p" ] || exit 0; python3 "$p" ' % MARK
+GUARD_CMD, ENSURE_CMD = _HOOK + "guard", _HOOK + "ensure-hooks"
+
+
+def _cc(event: str, matcher: str) -> dict:
+    """Claude Code-style hooks: nested `hooks` lists (Claude, Copilot via .claude, Codex, Gemini, Qwen)."""
+    return {event: [{"matcher": matcher, "hooks": [{"type": "command", "command": GUARD_CMD}]}],
+            "SessionStart": [{"hooks": [{"type": "command", "command": ENSURE_CMD}]}]}
+
+
+HOOK_FILES = {  # each tool's project hook file -> the hooks we merge into it
+    # Bash (Copilot via .claude: bash): only Libraryan runs are checked for shell writes, see cchooks.SHELL_ESCAPE
+    ".claude/settings.json": _cc("PreToolUse", "Edit|Write|MultiEdit|NotebookEdit|apply_patch|Bash|bash"),
+    ".codex/hooks.json": _cc("PreToolUse", "Edit|Write|apply_patch|Bash"),
+    ".gemini/settings.json": _cc("BeforeTool", "write_file|replace"),
+    ".qwen/settings.json": _cc("PreToolUse", "write_file|edit|Write|Edit"),
+    ".cursor/hooks.json": {"preToolUse": [{"command": GUARD_CMD, "matcher": "Write|Edit|Delete"}],
+                           "sessionStart": [{"command": ENSURE_CMD}]},
+}
+GEMINI_CONTEXT = ["AGENTS.md", "GEMINI.md"]
+OPENCODE_PLUGIN = ".opencode/plugins/libraryan.js"
 # everything the installer writes; init/upgrade/uninstall commit only files under these
 PATHS = [".libraryan", ".claude/agents/libraryan.md", ".claude/agents/libraryan-reviewer.md",
-         ".claude/skills/libraryan-request", ".claude/settings.json", "AGENTS.md", "CLAUDE.md"]
+         ".claude/skills/libraryan-request", *HOOK_FILES, OPENCODE_PLUGIN, "AGENTS.md", "CLAUDE.md"]
 
 
 def _ours(entry: dict) -> bool:
-    return any(MARK in h.get("command", "") for h in entry.get("hooks", []))
+    return any(MARK in h.get("command", "") for h in [entry, *entry.get("hooks", [])])
 
 
-def merge_settings(settings: dict) -> dict:
-    s = copy.deepcopy(settings)
-    hooks = s.setdefault("hooks", {})
-    for event, entries in SETTINGS["hooks"].items():
-        if not any(_ours(e) for e in hooks.get(event, [])):
-            hooks.setdefault(event, []).extend(copy.deepcopy(entries))
-    return s
+def merge_hooks(doc: dict, hooks: dict) -> dict:
+    d = copy.deepcopy(doc)
+    have = d.setdefault("hooks", {})
+    for event, entries in hooks.items():
+        if not any(_ours(e) for e in have.get(event, [])):
+            have.setdefault(event, []).extend(copy.deepcopy(entries))
+    return d
 
 
-def strip_settings(settings: dict) -> dict:
-    s = copy.deepcopy(settings)
-    hooks = s.get("hooks", {})
+def strip_hooks(doc: dict) -> dict:
+    d = copy.deepcopy(doc)
+    hooks = d.get("hooks", {})
     for event in list(hooks):
         hooks[event] = [e for e in hooks[event] if not _ours(e)]
         if not hooks[event]:
             del hooks[event]
-    if "hooks" in s and not hooks:
-        del s["hooks"]
-    return s
+    if "hooks" in d and not hooks:
+        del d["hooks"]
+    return d
+
+
+def _read_hook_files(project: Path) -> dict | None:
+    """Each existing hook file's JSON (None if absent); prints and returns None if one is invalid."""
+    docs = {}
+    for rel in HOOK_FILES:
+        p = project / rel
+        try:
+            docs[rel] = json.loads(p.read_text()) if p.exists() else None
+            if docs[rel] is not None and not isinstance(docs[rel], dict):
+                raise ValueError("not a JSON object")
+        except ValueError as e:
+            print(f"libraryan: {rel} is not valid ({e}); fix it first", file=sys.stderr)
+            return None
+    return docs
+
+
+def _write_hook_files(project: Path, docs: dict, cfg: dict) -> None:
+    """Refresh our entries in every hook file; record the files we create so uninstall can delete them."""
+    created = set(cfg.get("created_files", []))
+    for rel, hooks in HOOK_FILES.items():
+        old = docs[rel]
+        if old is None:
+            created.add(rel)
+        doc = strip_hooks(old or ({"version": 1} if rel == ".cursor/hooks.json" else {}))  # key order stays stable
+        if rel == ".gemini/settings.json" and "fileName" not in doc.get("context", {}):
+            doc.setdefault("context", {})["fileName"] = GEMINI_CONTEXT  # Gemini reads only GEMINI.md otherwise
+        doc = merge_hooks(doc, hooks)
+        (project / rel).parent.mkdir(parents=True, exist_ok=True)
+        (project / rel).write_text(json.dumps(doc, indent=2) + "\n")
+    cfg["created_files"] = sorted(created)
 
 
 def _crontab(project: Path, line: str | None) -> None:
@@ -73,7 +120,8 @@ def _crontab(project: Path, line: str | None) -> None:
 def _copy(project: Path, source: Path) -> None:
     """Vendored package, runtime and templates: everything upgrade refreshes. `source` is the package dir."""
     lib = project / ".libraryan"
-    for name, src in (("libraryan", ""), ("bin", "_runtime/bin"), ("hooks", "_runtime/hooks")):
+    for name, src in (("libraryan", ""), ("bin", "_runtime/bin"), ("hooks", "_runtime/hooks"),
+                      ("policies", "_runtime/policies")):
         if (lib / name).exists():
             shutil.rmtree(lib / name)
         shutil.copytree(source / src, lib / name,
@@ -89,9 +137,21 @@ def _copy(project: Path, source: Path) -> None:
                       ("agents-block.md", ".libraryan/templates/agents-block.md")):  # reviewer's reference
         (project / dest).parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source / "_templates" / src, project / dest)
+    (project / OPENCODE_PLUGIN).parent.mkdir(parents=True, exist_ok=True)
+    (project / OPENCODE_PLUGIN).write_text((source / "_templates/opencode-plugin.js").read_text()
+                                           .replace("__GUARD_CMD__", json.dumps(GUARD_CMD)))
+    neutral_agents(project, source)
     (lib / "requests").mkdir(exist_ok=True)
     (lib / "requests/.gitkeep").touch()
     (lib / ".gitignore").write_text("state/\n__pycache__/\n")
+
+
+def neutral_agents(project: Path, source: Path) -> None:
+    """Tool-neutral instructions for non-Claude runtimes: the agent files' bodies without frontmatter."""
+    for name in ("libraryan", "libraryan-reviewer"):
+        body = (source / "_templates/agents" / f"{name}.md").read_text()
+        (project / ".libraryan/agents").mkdir(parents=True, exist_ok=True)
+        (project / ".libraryan/agents" / f"{name}.md").write_text(re.sub(r"\A---\n.*?\n---\n\s*", "", body, flags=re.S))
 
 
 def _files(project: Path) -> list[str]:
@@ -157,26 +217,38 @@ def _default_branch(project: Path) -> str:
     return ref.split("/", 1)[1] if ref else gitutil.current_branch(project)
 
 
-def init(project: Path, source: Path = PKG, run_setup: bool = True) -> int:
+def init(project: Path, source: Path = PKG, run_setup: bool = True, runtime: str | None = None) -> int:
     project, source = Path(project), Path(source)
     branch = _default_branch(project)
     if not runner._on_default(project, {"default_branch": branch}):
         print(f"libraryan: check out the default branch `{branch}` first", file=sys.stderr)
         return 1
+    reinstall = (project / config.CONFIG_PATH).is_file()
     cfg = config.load(project)
     if _dirty(project, cfg):
         return 1
-    claude = shutil.which("claude")
-    if not claude and run_setup:
-        print("libraryan: `claude` not found on PATH; install Claude Code, or use --no-setup", file=sys.stderr)
+    name = runtime or (cfg["runtime"] if reinstall else None) or runtimes.pick()  # a re-run keeps the chosen tool
+    if not name and run_setup:
+        print("libraryan: no supported agent CLI found. Install one of:", file=sys.stderr)
+        for n in runtimes.ORDER:
+            print(f"  {n}: {runtimes.get(n).INSTALL}", file=sys.stderr)
         return 1
-    settings = project / ".claude/settings.json"
+    name = name or "claude"  # --no-setup with nothing installed
     try:
-        old = json.loads(settings.read_text()) if settings.exists() else {}
-        if not isinstance(old, dict):
-            raise ValueError("not a JSON object")
+        adapter = runtimes.get(name)
     except ValueError as e:
-        print(f"libraryan: .claude/settings.json is not valid ({e}); fix it first", file=sys.stderr)
+        print(f"libraryan: {e}", file=sys.stderr)
+        return 1
+    if name == "command" and not cfg["runtime_command"]:
+        print("libraryan: --runtime command needs `runtime_command` in .libraryan/config.json", file=sys.stderr)
+        return 1
+    kept = cfg["runtime_bin"] if reinstall and not runtime and name == cfg["runtime"] else None
+    rbin = kept if kept and os.access(kept, os.X_OK) else shutil.which(adapter.BIN) if adapter.BIN else None
+    if runtime and run_setup and adapter.BIN and not rbin:
+        print(f"libraryan: {name} not found on PATH; install it first: {adapter.INSTALL}", file=sys.stderr)
+        return 1
+    docs = _read_hook_files(project)
+    if docs is None:
         return 1
     agents, claude_md = project / "AGENTS.md", project / "CLAUDE.md"
     linked = ((claude_md.is_symlink() and claude_md.resolve() == agents.resolve())
@@ -186,12 +258,10 @@ def init(project: Path, source: Path = PKG, run_setup: bool = True) -> int:
     hooks_path = gitutil.git(project, "config", "--local", "core.hooksPath", check=False)
     if hooks_path and (project / hooks_path).resolve() != (project / HOOKS_PATH).resolve():  # never chain to self
         cfg["chain_hooks_path"] = hooks_path
-    if not settings.exists():
-        cfg["created_settings"] = True
-    cfg.update(default_branch=branch, runner_host=socket.gethostname(), claude_bin=claude or "claude",
+    _write_hook_files(project, docs, cfg)
+    cfg.update(default_branch=branch, runner_host=socket.gethostname(), runtime=name, runtime_bin=rbin,
                claude_md_symlink=linked, installed_version=__version__)
     config.save(project, cfg)
-    settings.write_text(json.dumps(merge_settings(old), indent=2) + "\n")
     text = agents.read_text() if agents.exists() else ""
     if START not in text or END not in text:
         block = (source / "_templates/agents-block.md").read_text().strip() + "\n"
@@ -206,6 +276,9 @@ def init(project: Path, source: Path = PKG, run_setup: bool = True) -> int:
     # enabled only once the install is committed, so a failed install leaves no hooks or cron behind
     gitutil.git(project, "config", "--local", "core.hooksPath", HOOKS_PATH)
     _crontab(project, f"0 3 * * * cd '{project}' && python3 {MARK} run --reason daily")
+    print(f"Runtime: {name} {runtimes.detect(name, rbin) or 'not found'}; {adapter.AUTH}")
+    print("Teammates' tools: Codex runs the edit guard once the project and the hook are trusted (`/hooks`), "
+          "Gemini and Copilot once the folder is trusted; until then the git lock covers every tool.")
     if not run_setup:
         return 0
     cfg = config.load(project)
@@ -238,7 +311,11 @@ def upgrade(project: Path, source: Path = PKG) -> int:
         return 1
     if _dirty(project, cfg):
         return 1
+    docs = _read_hook_files(project)
+    if docs is None:
+        return 1
     _copy(project, Path(source))
+    _write_hook_files(project, docs, cfg)
     cfg.pop("source_path", None)  # pre-0.2 key: an absolute path on someone's machine
     cfg["installed_version"] = __version__
     config.save(project, cfg)  # adds keys new in DEFAULTS, keeps existing values
@@ -250,6 +327,9 @@ def uninstall(project: Path) -> int:
     cfg = config.load(project)
     if _dirty(project, cfg, docs=False):  # includes untracked requests, which rmtree would destroy
         return 1
+    docs = _read_hook_files(project)
+    if docs is None:  # before anything changes, so uninstall never stops halfway
+        return 1
     if cfg["chain_hooks_path"]:
         gitutil.git(project, "config", "--local", "core.hooksPath", cfg["chain_hooks_path"])
     else:
@@ -259,14 +339,22 @@ def uninstall(project: Path) -> int:
     if agents.exists():
         text = re.sub(rf"\n*{re.escape(START)}.*?{re.escape(END)}\n*", "\n\n", agents.read_text(), flags=re.S)
         agents.write_text(text.strip("\n") + "\n" if text.strip() else "")
-    settings = project / ".claude/settings.json"
-    if settings.exists():
-        s = strip_settings(json.loads(settings.read_text()))
-        if s == {} and cfg.get("created_settings"):
-            settings.unlink()
+    created = set(cfg.get("created_files", [])) | ({".claude/settings.json"} if cfg.get("created_settings") else set())
+    for rel in HOOK_FILES:
+        p = project / rel
+        if docs[rel] is None:
+            continue
+        doc = strip_hooks(docs[rel])
+        # ponytail: a user's own identical context.fileName goes too; record ours in cfg if that ever matters
+        if rel == ".gemini/settings.json" and doc.get("context", {}).get("fileName") == GEMINI_CONTEXT:
+            del doc["context"]["fileName"]
+            if not doc["context"]:
+                del doc["context"]
+        if rel in created and doc in ({}, {"version": 1}):
+            p.unlink()
         else:
-            settings.write_text(json.dumps(s, indent=2) + "\n")
-    for p in (".claude/agents/libraryan.md", ".claude/agents/libraryan-reviewer.md"):
+            p.write_text(json.dumps(doc, indent=2) + "\n")
+    for p in (".claude/agents/libraryan.md", ".claude/agents/libraryan-reviewer.md", OPENCODE_PLUGIN):
         (project / p).unlink(missing_ok=True)
     shutil.rmtree(project / ".claude/skills/libraryan-request", ignore_errors=True)
     shutil.rmtree(project / ".libraryan", ignore_errors=True)
