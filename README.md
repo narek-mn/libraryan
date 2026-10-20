@@ -1,25 +1,50 @@
 # Libraryan
 
+[![tests](https://github.com/narek-mn/libraryan/actions/workflows/test.yml/badge.svg)](https://github.com/narek-mn/libraryan/actions/workflows/test.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+
 Libraryan installs a Claude Code agent as the sole writer of a project's Markdown knowledge base.
 Everyone else (people, other agents) files requests; Libraryan updates the docs, checks them, and commits.
 
+## Quick start
+
+```
+pipx install libraryan        # once per machine (before the first PyPI release: pipx install git+https://github.com/narek-mn/libraryan)
+cd <your-project>             # any git repo, on its default branch
+libraryan init                # once per project
+```
+
+That's it. From now on Libraryan keeps the docs up to date after your commits and once a day. To change a doc, ask your agent to file a request (it knows how), or see [Working with it](#working-with-it).
+
 ## Requirements
 
-Linux or macOS. Python 3.10+, git >= 2.34, Claude Code >= 2.1, cron. [gitleaks](https://github.com/gitleaks/gitleaks) is optional (secret scanning).
+Linux or macOS with:
+
+| Need | Check | Install |
+|---|---|---|
+| Python 3.10+ | `python3 --version` | your package manager |
+| pipx | `pipx --version` | Debian/Ubuntu: `sudo apt install pipx && pipx ensurepath`; macOS: `brew install pipx && pipx ensurepath` |
+| git 2.34+ | `git --version` | your package manager |
+| Claude Code 2.1+, logged in | `claude --version` | [Claude Code setup](https://docs.anthropic.com/en/docs/claude-code/setup) |
+| cron | `crontab -l` | usually preinstalled |
+| [gitleaks](https://github.com/gitleaks/gitleaks) (optional) | `gitleaks version` | secret scanning |
 
 ## Install
 
-Install the tool once with [pipx](https://pipx.pypa.io) (on Debian/Ubuntu: `sudo apt install pipx && pipx ensurepath`):
+```
+pipx install libraryan
+```
+
+Before the first PyPI release, or to try the latest `main`:
 
 ```
-pipx install libraryan                                     # once published on PyPI
-pipx install git+https://github.com/narek-mn/libraryan     # until then; or `pipx install .` from a clone
+pipx install git+https://github.com/narek-mn/libraryan
 ```
 
 Then, in each project:
 
 ```
-cd <your-project>        # a git repo, on its default branch, Claude Code installed
+cd <your-project>
 libraryan init
 ```
 
