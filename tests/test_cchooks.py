@@ -57,3 +57,31 @@ def test_guard_confines_libraryan_run(repo, tmp_path_factory):
         assert cchooks.guard(_payload(p), repo, config.DEFAULTS, env)[0] == 2, p
     assert cchooks.guard(_payload(repo / "docs" / "a.md", "Edit"), repo, config.DEFAULTS, env) == (0, "")
     assert cchooks.guard(_payload(repo / "src" / "a.py", "Bash"), repo, config.DEFAULTS, env) == (0, "")
+
+
+def test_guard_copilot_path_key(repo):
+    # Copilot CLI runs .claude/settings.json hooks but keeps its own argument names (`path`, not `file_path`)
+    p = {"tool_name": "Write", "tool_input": {"path": str(repo / "docs" / "a.md"), "file_text": "x"}}
+    assert cchooks.guard(p, repo, config.DEFAULTS, {})[0] == 2
+
+
+PATCH = "*** Begin Patch\n*** Update File: src/a.py\n@@\n-x\n+y\n*** {kind} File: {path}\n+hi\n*** End Patch\n"
+
+
+def test_guard_apply_patch(repo):
+    # Codex (and GPT models in Copilot) edit through apply_patch: the targets are only in the patch text
+    for kind in ("Add", "Update", "Delete"):
+        p = {"tool_name": "apply_patch", "tool_input": {"command": PATCH.format(kind=kind, path="docs/a.md")}, "cwd": str(repo)}
+        assert cchooks.guard(p, repo, config.DEFAULTS, {})[0] == 2, kind
+    moved = "*** Begin Patch\n*** Update File: src/a.py\n*** Move to: docs/a.md\n@@\n-x\n+y\n*** End Patch\n"
+    assert cchooks.guard({"tool_name": "apply_patch", "tool_input": {"command": moved}, "cwd": str(repo)},
+                         repo, config.DEFAULTS, {})[0] == 2
+    code_only = PATCH.format(kind="Add", path="src/b.py")
+    assert cchooks.guard({"tool_name": "apply_patch", "tool_input": {"command": code_only}, "cwd": str(repo)},
+                         repo, config.DEFAULTS, {}) == (0, "")
+
+
+def test_guard_apply_patch_through_shell(repo):
+    cmd = "apply_patch <<'EOF'\n" + PATCH.format(kind="Add", path="docs/a.md") + "EOF\n"
+    p = {"tool_name": "Bash", "tool_input": {"command": cmd}, "cwd": str(repo)}
+    assert cchooks.guard(p, repo, config.DEFAULTS, {})[0] == 2

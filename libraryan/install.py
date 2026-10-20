@@ -19,7 +19,7 @@ MARK = ".libraryan/bin/libraryan"
 HOOKS_PATH = ".libraryan/hooks"
 START, END = "<!-- libraryan:start -->", "<!-- libraryan:end -->"
 SETTINGS = {"hooks": {
-    "PreToolUse": [{"matcher": "Edit|Write|MultiEdit|NotebookEdit",
+    "PreToolUse": [{"matcher": "Edit|Write|MultiEdit|NotebookEdit|apply_patch",
                     "hooks": [{"type": "command", "command": f'python3 "$CLAUDE_PROJECT_DIR"/{MARK} guard'}]}],
     "SessionStart": [{"hooks": [{"type": "command",
                                  "command": f'python3 "$CLAUDE_PROJECT_DIR"/{MARK} ensure-hooks'}]}],

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.2 - 2026-10-20
+
+- Fix: the instant edit guard missed edits made from GitHub Copilot CLI (it names the file `path`, not `file_path`) and patch-style edits (`apply_patch`, used by Codex and by GPT models in Copilot). It now blocks them before they happen. The git pre-commit lock was never affected.
+- Upgrade: `pipx upgrade libraryan`, then `libraryan upgrade` in each project (refreshes the hook settings).
+
 ## 0.2.1 - 2026-10-20
 
 - Fix: the run trace (`runs.jsonl`) and the run report could show far too few turns and seconds for a model call (seen: 1 turn and 14 s for a 5-minute setup run). Claude Code reported only the last resumed segment when the agent's self-review subagent ran in the background. Libraryan now runs Claude Code with background tasks disabled and measures each call's duration itself. Costs were always correct.

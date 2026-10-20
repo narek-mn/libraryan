@@ -1,6 +1,6 @@
 {
   "name": "libraryan",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Front door to the Libraryan CLI: installs it with pipx, sets up the current git repo, shows status, and files doc change requests",
   "author": {
     "name": "narek-mn"
