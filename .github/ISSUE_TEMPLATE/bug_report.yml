@@ -1,0 +1,40 @@
+name: Bug report
+description: Something does not work as documented
+labels: ["bug"]
+body:
+  - type: input
+    id: libraryan-version
+    attributes:
+      label: Libraryan version
+      description: Output of `libraryan --version`
+    validations:
+      required: true
+  - type: input
+    id: claude-version
+    attributes:
+      label: Claude Code version
+      description: Output of `claude --version`
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS
+      placeholder: Ubuntu 24.04, macOS 14, ...
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, what you got.
+    validations:
+      required: true
+  - type: textarea
+    id: report
+    attributes:
+      label: Latest report excerpt
+      description: |
+        Relevant part of `.libraryan/state/reports/latest.md`.
+        Remove secrets, tokens and private paths before pasting.
+      render: markdown
