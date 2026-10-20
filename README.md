@@ -106,7 +106,46 @@ flowchart LR
 
 ## See it on a real repo
 
-<!-- DEMO-RESULTS -->
+We built a small weather CLI the way agent-heavy repos really look: a README that documents flags and an env var the code dropped, a second setup guide that disagrees with it, scratch notes, meeting notes, an old to-do list, an empty stub, and one quiet bug in the code. Then we ran `libraryan init` once. These are the real results:
+
+<table>
+<tr><th>Before: 8 loose files</th><th>After one setup run (5.6 min, $2.29)</th></tr>
+<tr><td valign="top">
+
+```
+CHANGELOG-draft.md
+CLAUDE.md
+README.md          stale flags, wrong env var
+NOTES.md
+TODO_old.md
+meeting-notes-2024.md
+docs/ideas.md      empty "TBD"
+docs/setup-old.md  disagrees with README
+```
+
+</td><td valign="top">
+
+```
+README.md          fixed against the code
+AGENTS.md          project rules in one place
+CLAUDE.md          -> @AGENTS.md
+CHANGELOG-draft.md filled in
+docs/kb/
+  index.md  log.md
+  api-key.md          forecast-days.md
+  office-network-ssl.md  owm-api-version.md
+  response-cache.md   stdlib-only.md
+  units-flag.md
+```
+
+</td></tr>
+</table>
+
+- **5 junk files deleted, no fact lost.** The ledger mapped all 10 facts they held to their new homes, with quotes checked mechanically, and named the 2 files that held nothing worth keeping.
+- **The README was fixed against the code**: Python version, the `WEATHER_API_KEY` env var, the `--units`/`--days`/`--json` flags, and dev setup.
+- **It caught the code bug we planted** and reported it without touching the code: *"`weather_cli/cache.py:13`: `get()` returns the cached entry only when it is older than the TTL… The check is backwards."*
+- **It flagged a conflict** for a human: an old `AGENTS.md` rule told agents to edit the README directly.
+- **A later request** ("document the new Dockerfile") was applied in **53 s for $0.39**. Total for the day: **$2.68**, 2 commits, 0 failures, and an audit with no findings.
 
 Rebuild the demo yourself: [`examples/demo`](https://github.com/narek-mn/libraryan/tree/main/examples/demo).
 
