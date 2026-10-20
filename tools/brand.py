@@ -80,7 +80,7 @@ def social_png():
     draw_logo(d, 88, 96, 1.5)
     d.text((300, 100), "Libraryan", font=ImageFont.truetype(LATO + "Black.ttf", 96), fill=FG)
     d.text((304, 222), "The only agent allowed to touch your docs.", font=ImageFont.truetype(LATO + "Semibold.ttf", 36), fill=FG)
-    d.text((304, 270), "Every other agent files a request. A Claude Code agent for your project's Markdown.",
+    d.text((304, 270), "Every other agent files a request. Plain Markdown, AGENTS.md, any agent.",
            font=ImageFont.truetype(LATO + "Regular.ttf", 23), fill=DIM)
     # terminal card
     d.rounded_rectangle([88, 360, 1192, 560], radius=16, fill=CARD, outline="#30363d", width=2)

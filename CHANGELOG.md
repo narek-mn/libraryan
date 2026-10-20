@@ -3,6 +3,7 @@
 ## 0.2.1 - 2026-10-20
 
 - Fix: the run trace (`runs.jsonl`) and the run report could show far too few turns and seconds for a model call (seen: 1 turn and 14 s for a 5-minute setup run). Claude Code reported only the last resumed segment when the agent's self-review subagent ran in the background. Libraryan now runs Claude Code with background tasks disabled and measures each call's duration itself. Costs were always correct.
+- Docs: describe Libraryan as vendor-neutral (plain Markdown, `AGENTS.md`, a git-hook lock that stops any agent); the runner itself uses Claude Code today.
 - Upgrade: `pipx upgrade libraryan`, then `libraryan upgrade` in each project.
 
 ## 0.2.0 - 2026-10-20

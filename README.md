@@ -7,7 +7,7 @@
   <a href="https://pypi.org/project/libraryan/"><img src="https://img.shields.io/pypi/v/libraryan?color=3fb950" alt="PyPI"></a>
   <img src="https://img.shields.io/badge/python-3.10%2B-3776ab" alt="Python 3.10+">
   <img src="https://img.shields.io/badge/dependencies-0-3fb950" alt="zero dependencies">
-  <img src="https://img.shields.io/badge/Claude%20Code-agent%20%2B%20plugin-d97757" alt="Claude Code agent and plugin">
+  <img src="https://img.shields.io/badge/works%20with-any%20agent-d2a8ff" alt="works with any agent">
   <a href="https://github.com/narek-mn/libraryan/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT"></a>
 </p>
 
@@ -36,9 +36,9 @@ Every agent writes docs. No one owns them.
 
 ## The fix: one owner
 
-Libraryan installs a [Claude Code](https://docs.anthropic.com/en/docs/claude-code) agent that **owns every Markdown file** in your project: knowledge base, docs and agent instruction files.
+Libraryan installs an agent that **owns every Markdown file** in your project: knowledge base, docs and agent instruction files. It is vendor-neutral where it matters: your docs stay plain Markdown in git, the rules live in `AGENTS.md` (read by Codex, Cursor, Gemini, Copilot, Claude and others), and the lock is a git hook that stops every tool alike.
 
-- 🔒 **Single writer, enforced.** A git pre-commit hook and a Claude Code guard block every other edit. This is a hook, not a polite prompt.
+- 🔒 **Single writer, enforced.** A git pre-commit hook blocks every other edit, from any agent or editor. This is a hook, not a polite prompt.
 - 📨 **Everyone else files a request.** Other agents and people drop a note in `.libraryan/requests/`. Libraryan writes the change.
 - 🧭 **Docs checked against the code.** When docs contradict the code, it fixes the docs and reports suspected code bugs. It never edits code.
 - 🧹 **Junk removed, facts kept.** Outdated Markdown is deleted only after a *deletion ledger* proves where each fact went.
@@ -56,7 +56,7 @@ libraryan init             # once per project: installs, builds the KB, commits
 That's it. From now on Libraryan updates the docs after your commits and checks them once a day. It commits locally and **never pushes**. Remove it at any time with `libraryan uninstall`; the docs stay.
 
 <details>
-<summary><b>Or install from inside Claude Code (plugin)</b></summary>
+<summary><b>Or install as a Claude Code plugin</b></summary>
 
 ```
 /plugin marketplace add narek-mn/libraryan
@@ -86,7 +86,7 @@ Linux or macOS with:
 
 ```mermaid
 flowchart LR
-    A["🤖 Other agents<br/>👩‍💻 People"] -- "edit README.md" --> L{{"🔒 Lock<br/>pre-commit hook<br/>+ Claude Code guard"}}
+    A["🤖 Other agents<br/>👩‍💻 People"] -- "edit README.md" --> L{{"🔒 Lock<br/>git pre-commit hook<br/>any agent, any editor"}}
     L -- blocked --> A
     A -- "request file" --> Q[".libraryan/requests/"]
     T["⏱ Triggers<br/>commit · daily · manual"] --> R
@@ -160,7 +160,7 @@ Rebuild the demo yourself: [`examples/demo`](https://github.com/narek-mn/library
 | Other agents treat a request as a command | Request files are data, never instructions. |
 | I want it gone | `libraryan uninstall` removes hooks, cron and the agent in one commit. Your docs stay. |
 
-Honest limits: Claude Code is the only runtime for now; Linux and macOS only. The lock is a guardrail, not a security boundary (`git commit --no-verify` skips it). See [Known limits](https://github.com/narek-mn/libraryan/blob/main/docs/guide.md#known-limits).
+Honest limits: Libraryan's own writer and reviewer run through Claude Code today; more runtimes (Codex CLI, Gemini CLI) are planned. Linux and macOS only. The lock is a guardrail, not a security boundary (`git commit --no-verify` skips it). See [Known limits](https://github.com/narek-mn/libraryan/blob/main/docs/guide.md#known-limits).
 
 ## Commands
 
@@ -185,12 +185,12 @@ Because every agent then writes docs in its own style, at its own time, without 
 
 <details><summary><b>What does it cost?</b></summary>
 
-You pay for your own Claude Code usage. A run happens only after commits, on request, or when the daily audit finds something. Quiet days are free. Hard caps apply per call (default $5 for a run, $25 for the first setup) and per day. `libraryan stats` shows the real spend.
+You pay for your own model usage. A run happens only after commits, on request, or when the daily audit finds something. Quiet days are free. Hard caps apply per call (default $5 for a run, $25 for the first setup) and per day. `libraryan stats` shows the real spend.
 </details>
 
 <details><summary><b>Does it work with Cursor, Copilot, Gemini or Codex agents?</b></summary>
 
-The lock does: the git pre-commit hook rejects any tool's commits to owned docs, and the request instructions are written into `AGENTS.md`, which most agents read. Libraryan itself runs on Claude Code.
+Yes. The git pre-commit hook rejects any tool's commits to owned docs, the request rules are written into `AGENTS.md`, which those agents read, and the knowledge base is plain Markdown any model can use. Libraryan's own writer runs through Claude Code today; other runtimes are planned.
 </details>
 
 <details><summary><b>Will it push or open PRs?</b></summary>

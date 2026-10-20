@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Libraryan — the only agent allowed to touch your docs</title>
-<meta name="description" content="Your AI agents write Markdown faster than anyone can keep it true. Libraryan makes one Claude Code agent the only writer of your project's docs. Every other agent, and every person, files a request.">
+<meta name="description" content="Your AI agents write Markdown faster than anyone can keep it true. Libraryan makes one agent the only writer of your project's docs. Every other agent, and every person, files a request.">
 <meta name="theme-color" content="#0d1117">
 <link rel="canonical" href="https://narek-mn.github.io/libraryan/">
 <meta property="og:type" content="website">
@@ -223,7 +223,7 @@ footer a{color:var(--dim)}footer a:hover{color:var(--fg)}
 <header class="hero" id="top">
   <div class="wrap">
     <svg class="logo" role="img" aria-label="Libraryan logo: four books on a shelf with a green check mark"><use href="#logo"/></svg>
-    <div><span class="pill"><b>●</b> Claude Code agent + plugin · MIT · zero dependencies</span></div>
+    <div><span class="pill"><b>●</b> Works with any agent · MIT · zero dependencies</span></div>
     <h1>The only agent allowed to <span class="grad">touch your docs.</span></h1>
     <p class="lede">Your AI agents write Markdown faster than anyone can keep it true. Libraryan makes one agent the <b>only writer</b> of your project's docs. Every other agent, and every person, files a request.</p>
     <div class="ctas">
@@ -249,7 +249,7 @@ footer a{color:var(--dim)}footer a:hover{color:var(--fg)}
       <p class="eyebrow">The problem</p>
       <h2>Every agent writes docs. No one owns them.</h2>
       <p>Give a repo a few coding agents and a few months, and the Markdown rots: a <code>README</code> that documents flags the code dropped, three <code>setup</code> guides that disagree, <code>NOTES.md</code>, <code>TODO_old.md</code>, an empty <code>ideas.md</code>, and agent instruction files nobody has read since they were written.</p>
-      <p><strong>The fix: one owner.</strong> Libraryan installs a <a href="https://docs.anthropic.com/en/docs/claude-code">Claude Code</a> agent that owns every Markdown file in your project: knowledge base, docs and agent instruction files.</p>
+      <p><strong>The fix: one owner.</strong> Libraryan installs an agent that owns every Markdown file in your project: knowledge base, docs and agent instruction files.</p>
     </div>
     <div class="files" aria-label="Examples of Markdown rot">
       <div class="bad"><span>README.md</span><span>documents flags the code dropped</span></div>
@@ -267,7 +267,7 @@ footer a{color:var(--dim)}footer a:hover{color:var(--fg)}
     <p class="eyebrow">What you get</p>
     <h2>One writer. Enforced, reviewed, and cheap.</h2>
     <div class="grid">
-      <article class="card"><div class="ic c-b"><svg aria-hidden="true" viewBox="0 0 24 24"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 018 0v4"/></svg></div><h3>Single writer, enforced.</h3><p>A git pre-commit hook and a Claude Code guard block every other edit. This is a hook, not a polite prompt.</p></article>
+      <article class="card"><div class="ic c-b"><svg aria-hidden="true" viewBox="0 0 24 24"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 018 0v4"/></svg></div><h3>Single writer, enforced.</h3><p>A git pre-commit hook blocks every other edit, from any agent or editor. This is a hook, not a polite prompt.</p></article>
       <article class="card"><div class="ic c-p"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 4h16v16H4z"/><path d="M4 7l8 6 8-6"/></svg></div><h3>Everyone else files a request.</h3><p>Other agents and people drop a note in <code>.libraryan/requests/</code>. Libraryan writes the change.</p></article>
       <article class="card"><div class="ic c-y"><svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M15.5 8.5l-2 5-5 2 2-5z"/></svg></div><h3>Docs checked against the code.</h3><p>When docs contradict the code, it fixes the docs and reports suspected code bugs. It never edits code.</p></article>
       <article class="card"><div class="ic c-g"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg></div><h3>Junk removed, facts kept.</h3><p>Outdated Markdown is deleted only after a <em>deletion ledger</em> proves where each fact went.</p></article>
@@ -283,7 +283,7 @@ footer a{color:var(--dim)}footer a:hover{color:var(--fg)}
     <h2>Every doc change takes the same path.</h2>
     <p class="sub">Other agents and people hit the lock. Requests, commits, the daily run and manual runs all feed one Libraryan run, which is committed only if the ledger and the reviewer agree.</p>
     <ol class="flow">
-      <li class="k"><span class="n">lock</span><b>🔒 Lock</b><small>Pre-commit hook + Claude Code guard block direct edits to owned docs.</small></li>
+      <li class="k"><span class="n">lock</span><b>🔒 Lock</b><small>A git pre-commit hook blocks direct edits to owned docs, from any agent or editor.</small></li>
       <li class="q"><span class="n">request</span><b>📨 Request</b><small>A request file in <code>.libraryan/requests/</code>.</small></li>
       <li class="r"><span class="n">run</span><b>📚 Run</b><small>Triggered by commit, daily or manual. Audit → write → checks.</small></li>
       <li class="l"><span class="n">ledger</span><b>🧾 Ledger</b><small>Deletion ledger: every fact accounted for.</small></li>
@@ -327,7 +327,7 @@ footer a{color:var(--dim)}footer a:hover{color:var(--fg)}
         </tbody>
       </table>
     </div>
-    <p class="note"><strong>Honest limits:</strong> Claude Code is the only runtime for now; Linux and macOS only. The lock is a guardrail, not a security boundary (<code>git commit --no-verify</code> skips it). See <a href="https://github.com/narek-mn/libraryan/blob/main/docs/guide.md#known-limits">Known limits</a>.</p>
+    <p class="note"><strong>Honest limits:</strong> Libraryan's own writer and reviewer run through Claude Code today; more runtimes (Codex CLI, Gemini CLI) are planned. Linux and macOS only. The lock is a guardrail, not a security boundary (<code>git commit --no-verify</code> skips it). See <a href="https://github.com/narek-mn/libraryan/blob/main/docs/guide.md#known-limits">Known limits</a>.</p>
   </div>
 </section>
 
@@ -345,7 +345,7 @@ footer a{color:var(--dim)}footer a:hover{color:var(--fg)}
         <p><code>libraryan init</code> installs, builds the KB, commits.</p>
       </div>
       <div class="panel">
-        <h3>Inside Claude Code <small>plugin</small></h3>
+        <h3>Claude Code plugin <small>optional</small></h3>
         <pre><span class="t-p">/plugin</span> marketplace add narek-mn/libraryan
 <span class="t-p">/plugin</span> install libraryan@libraryan
 <span class="t-p">/libraryan:init</span><button class="copy" type="button" data-copy="/plugin marketplace add narek-mn/libraryan&#10;/plugin install libraryan@libraryan&#10;/libraryan:init" aria-label="Copy plugin commands"><svg aria-hidden="true"><use href="#copy"/></svg></button></pre>
@@ -362,8 +362,8 @@ footer a{color:var(--dim)}footer a:hover{color:var(--fg)}
     <h2>Questions</h2>
     <div class="faq">
       <details><summary>Why not just put "keep the docs updated" in CLAUDE.md?</summary><p>Because every agent then writes docs in its own style, at its own time, without checking them against the code. That instruction is how Markdown rot starts. Libraryan makes one writer responsible and enforces it with hooks, so the rule can't be skipped by accident.</p></details>
-      <details><summary>What does it cost?</summary><p>You pay for your own Claude Code usage. A run happens only after commits, on request, or when the daily audit finds something. Quiet days are free. Hard caps apply per call (default $5 for a run, $25 for the first setup) and per day. <code>libraryan stats</code> shows the real spend.</p></details>
-      <details><summary>Does it work with Cursor, Copilot, Gemini or Codex agents?</summary><p>The lock does: the git pre-commit hook rejects any tool's commits to owned docs, and the request instructions are written into <code>AGENTS.md</code>, which most agents read. Libraryan itself runs on Claude Code.</p></details>
+      <details><summary>What does it cost?</summary><p>You pay for your own model usage. A run happens only after commits, on request, or when the daily audit finds something. Quiet days are free. Hard caps apply per call (default $5 for a run, $25 for the first setup) and per day. <code>libraryan stats</code> shows the real spend.</p></details>
+      <details><summary>Does it work with Cursor, Copilot, Gemini or Codex agents?</summary><p>Yes. The git pre-commit hook rejects any tool's commits to owned docs, the request rules are written into <code>AGENTS.md</code>, which those agents read, and the knowledge base is plain Markdown any model can use. Libraryan's own writer runs through Claude Code today; other runtimes are planned.</p></details>
       <details><summary>Will it push or open PRs?</summary><p>No. It commits locally, on your default branch only, under its own <code>docs(libraryan):</code> prefix. You decide when to push.</p></details>
       <details><summary>Can my teammates still change docs?</summary><p>Yes, by filing a request: a short Markdown file under <code>.libraryan/requests/</code>. Their agents learn how from the <code>libraryan-request</code> skill and <code>AGENTS.md</code>. You can also exempt paths in the config.</p></details>
     </div>

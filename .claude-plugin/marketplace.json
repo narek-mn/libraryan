@@ -1,7 +1,7 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "libraryan",
-  "description": "Libraryan: a Claude Code agent that owns and maintains a git project's Markdown knowledge base",
+  "description": "Libraryan: the only writer of a git project's Markdown knowledge base; every other agent files a request",
   "owner": {
     "name": "narek-mn"
   },
