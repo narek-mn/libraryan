@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Claude Code plugin: `/plugin marketplace add narek-mn/libraryan`, then `/libraryan:init`, `/libraryan:status`, `/libraryan:request`.
+- New README with demo, full reference moved to `docs/guide.md`.
+- Reproducible demo project (`examples/demo`).
+
 ## 0.2.0
 
 - Installable with `pipx install libraryan`; new `libraryan init` and `libraryan --version`.

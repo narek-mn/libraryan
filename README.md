@@ -1,22 +1,75 @@
-# Libraryan
+<p align="center">
+  <img src="https://raw.githubusercontent.com/narek-mn/libraryan/main/docs/assets/banner.png" alt="Libraryan: the only agent allowed to touch your docs" width="100%">
+</p>
 
-[![tests](https://github.com/narek-mn/libraryan/actions/workflows/test.yml/badge.svg)](https://github.com/narek-mn/libraryan/actions/workflows/test.yml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+<p align="center">
+  <a href="https://github.com/narek-mn/libraryan/actions/workflows/test.yml"><img src="https://github.com/narek-mn/libraryan/actions/workflows/test.yml/badge.svg" alt="tests"></a>
+  <img src="https://img.shields.io/badge/python-3.10%2B-3776ab" alt="Python 3.10+">
+  <img src="https://img.shields.io/badge/dependencies-0-3fb950" alt="zero dependencies">
+  <img src="https://img.shields.io/badge/Claude%20Code-agent%20%2B%20plugin-d97757" alt="Claude Code agent and plugin">
+  <a href="https://github.com/narek-mn/libraryan/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT"></a>
+</p>
 
-Libraryan installs a Claude Code agent as the sole writer of a project's Markdown knowledge base.
-Everyone else (people, other agents) files requests; Libraryan updates the docs, checks them, and commits.
+<p align="center">
+  <b>Your AI agents write Markdown faster than anyone can keep it true.</b><br>
+  Libraryan makes one agent the <b>only writer</b> of your project's docs. Every other agent, and every person, files a request.
+</p>
+
+<p align="center">
+  <a href="#quick-start">Quick start</a> ·
+  <a href="#how-it-works">How it works</a> ·
+  <a href="#see-it-on-a-real-repo">Demo</a> ·
+  <a href="#why-trust-it-with-your-docs">Safety</a> ·
+  <a href="https://github.com/narek-mn/libraryan/blob/main/docs/guide.md">Guide</a>
+</p>
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/narek-mn/libraryan/main/docs/assets/demo.gif" alt="Libraryan demo: an agent's edit is blocked, it files a request, Libraryan commits reviewed docs" width="100%">
+</p>
+
+## The problem
+
+Give a repo a few coding agents and a few months, and the Markdown rots:
+a `README` that documents flags the code dropped, three `setup` guides that disagree, `NOTES.md`, `TODO_old.md`, an empty `ideas.md`, and agent instruction files nobody has read since they were written.
+Every agent writes docs. No one owns them.
+
+## The fix: one owner
+
+Libraryan installs a [Claude Code](https://docs.anthropic.com/en/docs/claude-code) agent that **owns every Markdown file** in your project: knowledge base, docs and agent instruction files.
+
+- 🔒 **Single writer, enforced.** A git pre-commit hook and a Claude Code guard block every other edit. This is a hook, not a polite prompt.
+- 📨 **Everyone else files a request.** Other agents and people drop a note in `.libraryan/requests/`. Libraryan writes the change.
+- 🧭 **Docs checked against the code.** When docs contradict the code, it fixes the docs and reports suspected code bugs. It never edits code.
+- 🧹 **Junk removed, facts kept.** Outdated Markdown is deleted only after a *deletion ledger* proves where each fact went.
+- 🧑‍⚖️ **A second agent reviews every commit.** A separate, read-only process with a fresh context. Anything but an exact `APPROVE` blocks the commit.
+- 💸 **Cost caps built in.** Per-call and daily budgets, and a model-free audit that makes quiet nights cost **$0**.
 
 ## Quick start
 
-```
-pipx install libraryan        # once per machine (before the first PyPI release: pipx install git+https://github.com/narek-mn/libraryan)
-cd <your-project>             # any git repo, on its default branch
-libraryan init                # once per project
+```bash
+pipx install libraryan     # once per machine
+cd your-project            # any git repo, on its default branch
+libraryan init             # once per project: installs, builds the KB, commits
 ```
 
-That's it. From now on Libraryan keeps the docs up to date after your commits and once a day. To change a doc, ask your agent to file a request (it knows how), or see [Working with it](#working-with-it).
+> **Not on PyPI yet?** Use `pipx install git+https://github.com/narek-mn/libraryan`.
 
-## Requirements
+That's it. From now on Libraryan updates the docs after your commits and checks them once a day. It commits locally and **never pushes**. Remove it at any time with `libraryan uninstall`; the docs stay.
+
+<details>
+<summary><b>Or install from inside Claude Code (plugin)</b></summary>
+
+```
+/plugin marketplace add narek-mn/libraryan
+/plugin install libraryan@libraryan
+/libraryan:init
+```
+
+`/libraryan:init` installs the CLI with pipx and runs `libraryan init`. `/libraryan:status` shows health and cost, and `/libraryan:request` files a doc change.
+</details>
+
+<details>
+<summary><b>Requirements</b></summary>
 
 Linux or macOS with:
 
@@ -28,152 +81,94 @@ Linux or macOS with:
 | Claude Code 2.1+, logged in | `claude --version` | [Claude Code setup](https://docs.anthropic.com/en/docs/claude-code/setup) |
 | cron | `crontab -l` | usually preinstalled |
 | [gitleaks](https://github.com/gitleaks/gitleaks) (optional) | `gitleaks version` | secret scanning |
+</details>
 
-## Install
+## How it works
 
-```
-pipx install libraryan
-```
-
-Before the first PyPI release, or to try the latest `main`:
-
-```
-pipx install git+https://github.com/narek-mn/libraryan
-```
-
-Then, in each project:
-
-```
-cd <your-project>
-libraryan init
+```mermaid
+flowchart LR
+    A["🤖 Other agents<br/>👩‍💻 People"] -- "edit README.md" --> L{{"🔒 Lock<br/>pre-commit hook<br/>+ Claude Code guard"}}
+    L -- blocked --> A
+    A -- "request file" --> Q[".libraryan/requests/"]
+    T["⏱ Triggers<br/>commit · daily · manual"] --> R
+    Q --> R["📚 Libraryan run<br/>audit → write → checks"]
+    R --> G["🧾 Deletion ledger<br/>facts accounted for"]
+    G --> V{"🧑‍⚖️ Independent<br/>reviewer"}
+    V -- APPROVE --> C["✅ docs(libraryan): commit"]
+    V -- anything else --> X["↩ restore + report"]
 ```
 
-`init` refuses to run on a non-default branch or with uncommitted installer paths or owned docs.
-Use `init --no-setup` to install without the first Claude run; the first commit afterwards then triggers the full setup run (up to `setup_timeout_minutes`).
+1. **Commit as usual.** After a quiet period (10 minutes by default), Libraryan wakes up. A daily run catches anything else.
+2. **Audit first, for free.** A deterministic check finds broken links, paths that no longer exist and notes older than their sources. If there is nothing to do, it stops there without calling a model.
+3. **Write.** Libraryan updates the knowledge base (`docs/kb/`, with an `index.md` and a `log.md`), fixes stale docs, merges duplicates and deletes junk.
+4. **Gate.** Lint, secret scan, deletion ledger, then an independent reviewer. Only fully approved runs are committed, and only Libraryan's own files.
+5. **Report.** Each run leaves a report (`.libraryan/state/reports/latest.md`) and a trace line with its cost. `libraryan stats` shows the totals.
 
-## What init changes
+## See it on a real repo
 
-1. Install commit (`docs(libraryan): install`) with:
-   - `.libraryan/` (vendored runtime, `config.json`, `requests/`, templates; `state/` is gitignored)
-   - `.claude/agents/libraryan.md` and `libraryan-reviewer.md`
-   - `.claude/skills/libraryan-request/SKILL.md` (how to file a request)
-   - `.claude/settings.json` hooks merged in (PreToolUse guard on Edit/Write, SessionStart hook re-enabling git hooks)
-   - an `AGENTS.md` block (between `<!-- libraryan:start/end -->`) and `CLAUDE.md` importing `@AGENTS.md`
-2. On this machine only (not committed): `core.hooksPath` set to `.libraryan/hooks` (existing hooks are chained), and a daily 03:00 cron job.
-3. First setup run (Claude Code, headless) creates the KB and is committed as a second commit.
+<!-- DEMO-RESULTS -->
 
-Libraryan commits only on the default branch and never pushes.
+Rebuild the demo yourself: [`examples/demo`](https://github.com/narek-mn/libraryan/tree/main/examples/demo).
 
-## Working with it
+## Why trust it with your docs
 
-Owned files (default: all `**/*.md`, `.claude/skills/**`, `.cursor/rules/**`, `.github/copilot-instructions.md`) cannot be edited directly:
-the Claude Code hook blocks Edit/Write, and the pre-commit hook rejects commits touching them (deletions pass).
-To change docs, add a Markdown file under `.libraryan/requests/` (see the `libraryan-request` skill) and commit it.
-After a commit, Libraryan waits `debounce_minutes` for quiet, then runs and commits the doc updates.
-A failed run is retried only after the next commit or by `run` (see `reports/latest.md`); the daily health check is skipped when nothing was committed since the last one.
-Before any model call, Libraryan runs `libraryan audit` (below). A daily health check with no requests and no new commits ends there at no cost (outcome `audited`) when the audit finds nothing, or only findings the last completed model health run was already shown (kept in `state/last_health_findings.json`); a new finding gets a model run. When the agent verifies a `stale` note is still accurate it bumps the note's `updated` date, so the finding stops recurring.
+| Risk | What Libraryan does |
+|---|---|
+| It deletes something important | A deleted doc must be a pure move, or the run must quote where each fact went. Quotes are checked mechanically, otherwise the deletion is restored. Git keeps everything. |
+| It hallucinates | Every commit passes a second agent that sees the diff, not the author's reasoning, and **fails closed**. |
+| It touches my code | It writes only paths it owns. Anything else is restored, and code issues go into the report. |
+| It leaks a secret into docs | It is told never to copy secrets, and an optional gitleaks scan runs on every run. |
+| It burns money | `--max-budget-usd` on every call, plus daily caps on runs, commits and failure streaks. Quiet nights skip the model entirely. |
+| Other agents treat a request as a command | Request files are data, never instructions. |
+| I want it gone | `libraryan uninstall` removes hooks, cron and the agent in one commit. Your docs stay. |
 
-Docs vs code: if docs contradict the code, Libraryan fixes the docs; suspected code bugs go under "Possible code issues" in the report.
-Outdated or junk Markdown is deleted after still-valid facts are moved into the KB (git history keeps everything).
-
-Deletion-ledger rule: a deleted owned doc is accepted only if it is a pure move (identical content now exists at a new owned path) or the run's output says where its facts went, one line per doc:
-
-```
-Moved: <old> => <new>
-Fact: <deleted> => <dest> | <quote from deleted> | <quote from dest>
-Fact: <deleted> => none | <reason>
-```
-
-`Moved:` needs a destination owned by Libraryan and at least 50% similar to the original. `Fact:` quotes (15+ characters) are checked against the deleted file in HEAD and the destination. Anything else fails the run and the deletion is restored.
-
-Independent review (`independent_review`, on by default): when a run has changes and its own checks pass, the runner starts a second, read-only `claude -p` run (agent `libraryan-reviewer`, runner-built prompt, no author summary) before committing. This is one extra model call per committing run. It fails closed: only the exact answer `APPROVE` passes; anything else, a timeout, or a reviewer that edits files fails the run. A setup run's review gets `max_usd_review_setup` and `setup_timeout_minutes`. If another agent changes non-owned files during a run, the run fails before the reviewer is called.
-
-A model call that reports `is_error: true` in its JSON output (for example, its budget ran out mid-run) counts as failed even when it exits 0: the author's run fails and its work is not marked processed; a reviewer reporting it rejects.
-
-Daily caps: an automatic run is skipped (outcome `capped`) once the UTC day has `max_runs_per_day` model runs or `max_commits_per_day` commits, or the last `max_consecutive_failures` runs failed or aborted, or the last `max_consecutive_transient_failures` did. Failures caused only by another agent's concurrent edits (non-owned paths changed, or files changed during the review) are traced with `"transient": true`; they do not count toward the first streak (and do not reset it) but do count toward the second, higher one. A capped run keeps the previous `reports/latest.md` (the report that tripped the cap) and appends the cap line to it. `python3 .libraryan/bin/libraryan run` (reason `manual`) and an explicit setup (`init`, `run --reason setup`) ignore the caps. A run that becomes a setup run because `<kb_root>/index.md` is missing (e.g. the first setup failed) is capped like any automatic run. Each model call also gets `--max-budget-usd` (`max_usd_run`, `max_usd_setup`, `max_usd_review`, `max_usd_review_setup`).
+Honest limits: Claude Code is the only runtime for now; Linux and macOS only. The lock is a guardrail, not a security boundary (`git commit --no-verify` skips it). See [Known limits](https://github.com/narek-mn/libraryan/blob/main/docs/guide.md#known-limits).
 
 ## Commands
 
-Run `libraryan <cmd>` inside the project. The vendored `python3 .libraryan/bin/libraryan <cmd>` runs the same commands without the global tool, except `init` (global command only) and `upgrade` (hands off to the global command):
-
 | Command | Does |
 |---|---|
-| `run [--reason R]` | Run Libraryan now (default reason `manual`) |
-| `wait` | Wait out the debounce window, then run |
-| `audit` | Deterministic docs-vs-code audit, no model call, always exit 0 (see below) |
-| `stats [--days N]` | Per-day runs, model calls, commits, failures and cost from the run trace (default 7 days) |
-| `check` | Lint docs and scan for secrets; exit 1 on problems |
-| `init [--no-setup]` | Install into this repo (global command only) |
-| `upgrade` | Refresh the project's vendored copy, hooks, agents and skill from the installed version, and commit (the vendored bin runs the global `libraryan upgrade`) |
-| `uninstall` | Remove hooks, cron, agent files, `.libraryan/` and the AGENTS.md block; commit. The KB stays |
+| `libraryan init` | Install into this repo and build the knowledge base |
+| `libraryan run` | Run now |
+| `libraryan audit` | Docs-vs-code audit, no model call |
+| `libraryan stats` | Runs, commits, failures and cost per day |
+| `libraryan check` | Lint docs and scan for secrets |
+| `libraryan upgrade` | Refresh the project after `pipx upgrade libraryan` |
+| `libraryan uninstall` | Remove it. The knowledge base stays |
 
-Internal (called by hooks/cron): `precommit`, `postcommit`, `guard`, `ensure-hooks`, `chainpath`.
-`libraryan --version` prints the installed version.
+Configuration, reports, upgrade notes and every option are in the **[guide](https://github.com/narek-mn/libraryan/blob/main/docs/guide.md)**.
 
-## Upgrade
+## FAQ
 
-```
-pipx upgrade libraryan
-libraryan upgrade        # in each project; commits the refreshed vendored copy
-```
+<details><summary><b>Why not just put "keep the docs updated" in CLAUDE.md?</b></summary>
 
-From a pre-0.2 source-checkout install: `pipx install libraryan`, then run `libraryan upgrade` in the project.
-`upgrade` refuses to replace a project installed by a newer version; run `pipx upgrade libraryan` first.
+Because every agent then writes docs in its own style, at its own time, without checking them against the code. That instruction is how Markdown rot starts. Libraryan makes one writer responsible and enforces it with hooks, so the rule can't be skipped by accident.
+</details>
 
-The project's git hooks, Claude Code hooks and cron job use the vendored copy in `.libraryan/`, so teammates do not need the tool installed unless they run commands themselves.
+<details><summary><b>What does it cost?</b></summary>
 
-## Configuration
+You pay for your own Claude Code usage. A run happens only after commits, on request, or when the daily audit finds something. Quiet days are free. Hard caps apply per call (default $5 for a run, $25 for the first setup) and per day. `libraryan stats` shows the real spend.
+</details>
 
-`.libraryan/config.json` (defaults shown):
+<details><summary><b>Does it work with Cursor, Copilot, Gemini or Codex agents?</b></summary>
 
-| Key | Default | Meaning |
-|---|---|---|
-| `kb_root` | `docs/kb` | Where the knowledge base lives |
-| `default_branch` | detected | Only branch Libraryan edits |
-| `runner_host` | install host | Only this machine runs Libraryan |
-| `claude_bin` / `model` | `claude` / `null` | Claude Code binary and model |
-| `debounce_minutes` | `10` | Quiet time after a commit before a run |
-| `run_timeout_minutes` | `30` | Kill a run after this long |
-| `setup_timeout_minutes` | `120` | Same, for the setup run; applies to the author and the reviewer each (up to 2× in total) |
-| `max_usd_run` / `max_usd_setup` / `max_usd_review` | `5` / `25` / `2` | Per-call budget passed to `claude --max-budget-usd` (run, setup, reviewer) |
-| `max_usd_review_setup` | `10` | Reviewer budget on a setup run |
-| `max_runs_per_day` | `24` | Daily cap on runs that call the model |
-| `max_commits_per_day` | `12` | Daily cap on Libraryan commits |
-| `max_consecutive_failures` | `3` | Stop automatic runs after this many failed or aborted runs in a row (transient failures excluded) |
-| `max_consecutive_transient_failures` | `10` | Same, counting transient failures too |
-| `independent_review` | `true` | Run the reviewer before every commit |
-| `reviewer_model` | `null` | Model for the reviewer (falls back to `model`) |
-| `review_timeout_minutes` | `15` | Kill a reviewer call after this long (setup runs use `setup_timeout_minutes`) |
-| `language` | `en` | Language of the docs |
-| `owned` / `excluded` | see `config.py` | Globs Libraryan owns / ignores |
-| `exempt` | `[]` | Owned-looking paths people may still edit |
-| `chain_hooks_path` | detected | Pre-existing hooks dir to chain to |
-| `installed_version` | set by init/upgrade | Libraryan version that last wrote the vendored copy |
+The lock does: the git pre-commit hook rejects any tool's commits to owned docs, and the request instructions are written into `AGENTS.md`, which most agents read. Libraryan itself runs on Claude Code.
+</details>
 
-## Reports
+<details><summary><b>Will it push or open PRs?</b></summary>
 
-Each run writes `.libraryan/state/reports/<timestamp>.md` and `.libraryan/state/reports/latest.md` (gitignored). Read `latest.md` for what changed, problems, cost, the deletion ledger, and "Possible code issues".
+No. It commits locally, on your default branch only, under its own `docs(libraryan):` prefix. You decide when to push.
+</details>
 
-Every run, including skipped ones, also appends a line to `.libraryan/state/runs.jsonl` (this replaces `runs.log`). Outcomes: `noop`, `deferred`, `capped`, `audited`, `nothing_changed`, `committed`, `failed`, `aborted`. `libraryan stats` summarises it.
+<details><summary><b>Can my teammates still change docs?</b></summary>
 
-## Audit
+Yes, by filing a request: a short Markdown file under `.libraryan/requests/`. Their agents learn how from the `libraryan-request` skill and `AGENTS.md`. You can also exempt paths in the config.
+</details>
 
-`libraryan audit` checks owned docs against the repo using paths only (no symbols): `broken-link`, `missing-path` (a backticked path that does not exist), and for KB notes `not-indexed`, `unsourced`, `missing-source`, `stale` (source changed after the note's `updated` date) and `duplicate-title`. Findings are leads, not a gate. The runner passes them to the model on runs that happen anyway.
+## Contributing
 
-## Uninstall
+Issues and PRs are welcome. Start with [CONTRIBUTING.md](https://github.com/narek-mn/libraryan/blob/main/CONTRIBUTING.md). Report security issues privately ([SECURITY.md](https://github.com/narek-mn/libraryan/blob/main/SECURITY.md)).
 
-`libraryan uninstall` (or `python3 .libraryan/bin/libraryan uninstall`). Restores `core.hooksPath`, removes the cron line and commits the removal.
+If Libraryan keeps your docs honest, a ⭐ helps others find it.
 
-## Known limits
-
-- `LIBRARYAN=1` in the environment bypasses the lock; any process can set it. The upgrade path is a CI check.
-- `git commit --no-verify` skips the pre-commit hook and bypasses the lock the same way.
-- A non-Claude agent (no guard hook) that edits an owned doc while a run is in progress can have that edit committed as Libraryan's.
-- Hooks and cron run `python3` from PATH and need Python >= 3.10 (macOS's `/usr/bin/python3` may be older).
-- Cron runs without your shell profile: make sure `claude` works non-interactively from cron (auth stored, not on a PATH that only nvm or your profile sets up).
-- A run fails (and is retried on the next trigger) when another agent edits code while Libraryan runs.
-- Requests from teammates that arrive by `git pull` wait for your next local commit or the 03:00 run.
-- Edits made through Bash are only caught at commit time.
-- Claude Code is the only supported runtime.
-- Teammates' clones get the lock when Claude Code's SessionStart hook enables the git hooks there, but they do not run Libraryan.
-- Windows is unsupported.
+<sub>MIT © narek-mn · [Changelog](https://github.com/narek-mn/libraryan/blob/main/CHANGELOG.md)</sub>
