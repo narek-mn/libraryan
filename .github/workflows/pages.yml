@@ -17,6 +17,8 @@ concurrency:
 
 jobs:
   deploy:
+    # Skip (not fail) until Pages is enabled: Settings -> Pages -> Source: GitHub Actions.
+    if: github.event_name == 'workflow_dispatch' || github.event.repository.has_pages
     runs-on: ubuntu-latest
     environment:
       name: github-pages

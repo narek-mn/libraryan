@@ -21,7 +21,7 @@ $ git log --oneline -2
 # pause 1.5
 # clear
 # title ~/weather-cli: what the setup run did
-$ cat .libraryan/state/reports/latest.md
+> {d}# .libraryan/state/reports/latest.md (abridged){/}
 > {b}README.md{/}: corrected Python version, env var ({c}WEATHER_API_KEY{/}), flags, dev setup
 > {b}docs/kb/{/}: 7 notes + index.md + log.md, built from the loose docs and the code
 > {r}deleted{/} NOTES.md, TODO_old.md, meeting-notes-2024.md, docs/ideas.md, docs/setup-old.md
@@ -35,7 +35,7 @@ $ cat .libraryan/state/reports/latest.md
 > {y}weather_cli/cache.py:13{/}: get() serves expired entries and skips fresh ones;
 >   the TTL check is backwards.
 >
-> {d}Reviewer: APPROVE   Cost: $2.29{/}
+> {d}- Cost: $2.29 (author + independent reviewer){/}
 # pause 4.5
 # clear
 # title ~/weather-cli: the lock
