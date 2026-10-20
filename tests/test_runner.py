@@ -988,3 +988,14 @@ def test_reports_in_the_same_second_both_kept(tmp_path, monkeypatch):
     assert len(archived) == 3
     assert sorted("first" in (st / "reports" / n).read_text() for n in archived) == [False, False, True]
     assert all(n.endswith(".md") for n in archived)
+
+
+def test_call_model_disables_background_tasks_and_times_the_call(tmp_path):
+    # A background subagent makes Claude Code's final JSON report only the last resumed segment
+    # (seen: 1 turn / 14 s for a 5-minute run); the runner forbids background tasks and measures time itself.
+    script = ("import json, os, time; time.sleep(0.3); "
+              "print(json.dumps({'result': os.environ.get('CLAUDE_CODE_DISABLE_BACKGROUND_TASKS', ''), "
+              "'duration_ms': 1, 'num_turns': 1}))")
+    text, problems, usage = runner._call_model(["python3", "-c", script, "prompt"], tmp_path, 30)
+    assert (text, problems) == ("1", [])
+    assert usage["duration_ms"] >= 300

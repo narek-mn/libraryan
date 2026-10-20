@@ -205,13 +205,16 @@ def _child_env() -> dict:
     # only session markers go; CLAUDE_CODE_OAUTH_TOKEN / CLAUDE_CODE_USE_* (auth, provider) must survive
     drop = lambda k: (k in ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SSE_PORT")
                       or k.startswith("GIT_") or (k.startswith("CLAUDE_CODE_") and "SESSION" in k))
-    return {**{k: v for k, v in os.environ.items() if not drop(k)}, "LIBRARYAN": "1"}
+    # background subagents would make the final JSON report only the last resumed segment's turns and time
+    return {**{k: v for k, v in os.environ.items() if not drop(k)}, "LIBRARYAN": "1",
+            "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1"}
 
 
 def _call_model(cmd: list[str], root: Path, timeout: float) -> tuple[str, list[str], dict]:
     """(text, problems, usage); `timeout` in seconds. Runs in its own process group so a timeout or interrupt
     also kills the agent's tool subprocesses."""
     cmd = [*cmd[:-1], "--output-format", "json", cmd[-1]]  # the prompt stays the last argument
+    start = time.monotonic()
     try:
         p = subprocess.Popen(cmd, cwd=root, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                              stderr=subprocess.PIPE, text=True, env=_child_env(), start_new_session=True)
@@ -229,6 +232,7 @@ def _call_model(cmd: list[str], root: Path, timeout: float) -> tuple[str, list[s
             return "", [f"{cmd[0]} timed out after {timeout / 60:g} min"], {}
         raise
     text, usage = trace.parse_output(out)
+    usage["duration_ms"] = round((time.monotonic() - start) * 1000)  # wall clock, whatever the model reports
     problems = [f"{cmd[0]} exited {p.returncode}"] if p.returncode else []
     if usage.get("is_error"):  # e.g. budget exhausted mid-run: the work is not done, whatever the exit code
         problems.append(f"{cmd[0]} reported is_error")
