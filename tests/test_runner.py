@@ -1254,6 +1254,13 @@ def test_ask_mode_proposes_then_approve_commits(repo, capsys, monkeypatch):
     assert "updated by fake claude" in (repo / "docs/kb/index.md").read_text()
     assert not (repo / ".libraryan/requests/20261019-120000-x.md").exists()
     assert runner.proposal(repo) is None and git(repo, "status", "--porcelain") == ""
+    assert (state(repo) / "last_processed").exists()
+
+
+def test_unreadable_proposal_can_be_rejected(repo):
+    make_kb(repo)
+    (repo / runner.PROPOSAL / "files").mkdir(parents=True)  # e.g. a hand-damaged proposal: no proposal.json
+    assert runner.reject(repo) == 0 and not (repo / runner.PROPOSAL).exists()
 
 
 def test_reject_discards_proposal(repo):
@@ -1261,8 +1268,10 @@ def test_reject_discards_proposal(repo):
     add_request(repo)
     git(repo, "add", "-A")
     runner.run(repo, cfg, "manual")
+    assert not (state(repo) / "last_processed").exists()  # processed only once approved
     assert runner.reject(repo) == 0
     assert runner.proposal(repo) is None and (repo / "docs/kb/index.md").read_text() == "# Index\n"
+    assert not (state(repo) / "last_processed").exists()
     assert runner.review_text(repo) == "No proposal waiting." and runner.approve(repo, cfg) == 1
 
 

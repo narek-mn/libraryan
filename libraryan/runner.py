@@ -317,9 +317,11 @@ def _commit(root: Path, paths: list[str], reason: str, output: str) -> str | Non
         _sleep(2)
 
 
-def _propose(root: Path, wt: Path, work: dict, reason: str, changed: list[str], base: dict, output: str) -> None:
-    """Save the run's owned changes (the files themselves, so no git gc can lose them) for `libraryan approve`."""
-    d = Path(root) / PROPOSAL
+def _propose(root: Path, wt: Path, work: dict, reason: str, changed: list[str], base: dict, output: str,
+             fnd: list) -> None:
+    """Save the run's owned changes (the files themselves, so no git gc can lose them) for `libraryan approve`.
+    Written aside and renamed into place, so an interrupted save never leaves a half proposal."""
+    d, final = Path(root) / (PROPOSAL + ".tmp"), Path(root) / PROPOSAL
     shutil.rmtree(d, ignore_errors=True)
     for p in changed:
         if (wt / p).is_file():
@@ -327,8 +329,19 @@ def _propose(root: Path, wt: Path, work: dict, reason: str, changed: list[str], 
             shutil.copyfile(wt / p, d / "files" / p)
     d.mkdir(parents=True, exist_ok=True)
     (d / "proposal.json").write_text(json.dumps({
-        "head": work["head"], "reason": reason, "changed": changed, "output": output,
-        "base": {p: base.get(p) for p in changed}, "at": time.strftime("%Y-%m-%d %H:%M", time.localtime(_now()))}))
+        "head": work["head"], "reason": reason, "changed": changed, "output": output, "health": work["health"],
+        "findings": fnd, "base": {p: base.get(p) for p in changed},
+        "at": time.strftime("%Y-%m-%d %H:%M", time.localtime(_now()))}))
+    shutil.rmtree(final, ignore_errors=True)
+    os.replace(d, final)
+
+
+def _processed(st: Path, root: Path, head: str, health: bool, fnd: list) -> None:
+    (st / "last_processed").write_text(head + "\n")  # commits made during the run stay new work
+    if health:
+        (st / "last_health_findings.json").write_text(json.dumps(fnd))
+        (st / "last_health").write_text(str(_now()))
+        (st / "last_health_head").write_text(gitutil.head(root) + "\n")  # after its own commit
 
 
 def proposal(root: Path) -> dict | None:
@@ -399,6 +412,7 @@ def approve(root: Path, cfg: dict) -> int:
             return 1
         shutil.rmtree(root / PROPOSAL)
         _trace(st, prop["reason"], prop["head"], "committed", changed=changed, commit=gitutil.head(root))
+        _processed(st, root, prop["head"], prop.get("health"), prop.get("findings", []))
         print(f"Committed {len(changed)} file(s): {gitutil.head(root)[:7]} docs(libraryan): {prop['reason']} run")
         return 0
 
@@ -407,8 +421,11 @@ def reject(root: Path) -> int:
     root, st = Path(root), _state(root)
     prop = proposal(root)
     if not prop:
-        print("libraryan: no proposal waiting", file=sys.stderr)
-        return 1
+        broken = (root / PROPOSAL).exists()  # e.g. a hand-edited proposal.json: clear it too
+        shutil.rmtree(root / PROPOSAL, ignore_errors=True)
+        print("Unreadable proposal removed." if broken else "libraryan: no proposal waiting",
+              file=sys.stdout if broken else sys.stderr)
+        return 0 if broken else 1
     shutil.rmtree(root / PROPOSAL)
     _trace(st, prop["reason"], prop["head"], "rejected", changed=prop["changed"])
     print("Proposal discarded. Pending requests stay and are tried again at the next run.")
@@ -618,7 +635,7 @@ def run(root: Path, cfg: dict, reason: str, extra_paths=()) -> int:
                     problems.append(f"{FOREIGN}: {', '.join(f)}")
                 proposed = changed and not problems and cfg["ask_before_commit"]
                 if proposed:  # the user approves it later (`libraryan approve`); the checkout is not touched
-                    _propose(root, wt, work, reason, changed, base, output)
+                    _propose(root, wt, work, reason, changed, base, output, fnd)
                 elif changed and not problems:
                     for p in changed:
                         applied.append(p)
@@ -656,12 +673,9 @@ def run(root: Path, cfg: dict, reason: str, extra_paths=()) -> int:
             _trace(st, reason, work["head"], "proposed" if proposed else "committed" if changed else "nothing_changed",
                    calls, changed, deleted, commit=gitutil.head(root) if changed and not proposed else None,
                    findings=fnd)
-            (st / "last_processed").write_text(work["head"] + "\n")  # commits made during the run stay new work
             (st / "last_failed").unlink(missing_ok=True)
-            if work["health"]:
-                (st / "last_health_findings.json").write_text(json.dumps(fnd))
-                (st / "last_health").write_text(str(_now()))
-                (st / "last_health_head").write_text(gitutil.head(root) + "\n")  # after its own commit
+            if not proposed:  # a proposal counts as processed only once approved (reject: the work is redone)
+                _processed(st, root, work["head"], work["health"], fnd)
             if not (st / "rerun").exists():
                 return 0
             reason = "rerun"
