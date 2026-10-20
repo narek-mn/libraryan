@@ -1,0 +1,17 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "libraryan",
+  "description": "Libraryan: a Claude Code agent that owns and maintains a git project's Markdown knowledge base",
+  "owner": {
+    "name": "narek-mn"
+  },
+  "plugins": [
+    {
+      "name": "libraryan",
+      "description": "Install and drive the Libraryan CLI from Claude Code: /libraryan:init, /libraryan:status, /libraryan:request",
+      "source": "./plugin",
+      "category": "productivity",
+      "homepage": "https://github.com/narek-mn/libraryan"
+    }
+  ]
+}
