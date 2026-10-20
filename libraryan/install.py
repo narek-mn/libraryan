@@ -217,7 +217,9 @@ def _default_branch(project: Path) -> str:
     return ref.split("/", 1)[1] if ref else gitutil.current_branch(project)
 
 
-def init(project: Path, source: Path = PKG, run_setup: bool = True, runtime: str | None = None) -> int:
+def init(project: Path, source: Path = PKG, run_setup: bool = True, runtime: str | None = None,
+         confirm=None) -> int:
+    """`confirm(files)` asks the user before the install commit (the CLI passes one; None: no question)."""
     project, source = Path(project), Path(source)
     branch = _default_branch(project)
     if not runner._on_default(project, {"default_branch": branch}):
@@ -269,6 +271,10 @@ def init(project: Path, source: Path = PKG, run_setup: bool = True, runtime: str
     text = claude_md.read_text() if claude_md.exists() else ""
     if not linked and "@AGENTS.md" not in text.splitlines():  # through a link AGENTS.md would import itself
         claude_md.write_text(text.rstrip("\n") + "\n\n@AGENTS.md\n" if text.strip() else "@AGENTS.md\n")
+    if confirm and not confirm(_files(project)):
+        _rollback(project)
+        print("libraryan: nothing was installed", file=sys.stderr)
+        return 1
     if _commit(project, "install", cfg):
         _rollback(project)
         print("libraryan: install rolled back; nothing was changed", file=sys.stderr)
@@ -286,8 +292,13 @@ def init(project: Path, source: Path = PKG, run_setup: bool = True, runtime: str
           "report: .libraryan/state/reports/latest.md", flush=True)
     code = runner.run(project, cfg, "setup", extra_paths=_files(project))
     if code:
-        print("libraryan: installed, but the setup run failed (see .libraryan/state/reports/latest.md); retry "
-              f"with `python3 {MARK} run --reason setup`", file=sys.stderr)
+        why = "".join(f"\n  - {p}" for p in runner.problems(project)) or "\n  - (no reason recorded)"
+        print(f"libraryan: installed, but the setup run failed:{why}\n"
+              f"Check that {name} works and is logged in ({adapter.AUTH}), then retry with "
+              f"`python3 {MARK} run --reason setup`. Full report: .libraryan/state/reports/latest.md", file=sys.stderr)
+    elif runner.proposal(project):
+        print("Setup finished. See what it wants to change with `libraryan review`, "
+              "then `libraryan approve` (commit) or `libraryan reject`.")
     return code
 
 

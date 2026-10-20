@@ -11,9 +11,14 @@ from .paths import is_protected, is_request
 
 USAGE = """usage: libraryan <command>
 
-  init [--no-setup] [--runtime NAME]
+  init [--no-setup] [--runtime NAME] [--yes]
                       install into this git repo and run the setup (--no-setup: install only;
-                      the agent CLI is picked automatically unless --runtime says which)
+                      the agent CLI is picked automatically unless --runtime says which;
+                      --yes: do not ask before the install commit)
+  status              is a proposal waiting? last run's outcome
+  review              show what the waiting proposal would change
+  approve             commit the waiting proposal
+  reject              discard the waiting proposal
   runtime [NAME] [--reviewer]
                       show the agent CLIs in use and found, or switch to NAME
   upgrade             refresh the project's vendored copy from this installed version
@@ -27,6 +32,14 @@ USAGE = """usage: libraryan <command>
 
 internal (hooks and cron): precommit, postcommit, guard, ensure-hooks, chainpath"""
 PACKAGED = (install.PKG / "_templates").is_dir()  # False in a project's vendored copy
+
+def _confirm(files: list[str]) -> bool:
+    print("Libraryan will commit these files:\n  " + "\n  ".join(files))
+    if not sys.stdin.isatty():
+        print("libraryan: no terminal to ask in; rerun with --yes to install without asking", file=sys.stderr)
+        return False
+    return input("Commit these? [y/N] ").strip().lower() in ("y", "yes")
+
 
 def _precommit() -> int:
     root = gitutil.repo_root(Path.cwd())
@@ -121,11 +134,29 @@ def main(argv: list[str]) -> int:
         ap = argparse.ArgumentParser(prog="libraryan init")
         ap.add_argument("--no-setup", action="store_true", help="install only; skip the setup run (no model call)")
         ap.add_argument("--runtime", help="agent CLI to use: " + ", ".join(runtimes.NAMES))
+        ap.add_argument("--yes", action="store_true", help="do not ask before the install commit")
         a = ap.parse_args(argv[1:])
         if not PACKAGED:
             print("libraryan: install the tool first: pipx install libraryan", file=sys.stderr)
             return 1
-        return install.init(gitutil.repo_root(Path.cwd()), run_setup=not a.no_setup, runtime=a.runtime)
+        return install.init(gitutil.repo_root(Path.cwd()), run_setup=not a.no_setup, runtime=a.runtime,
+                            confirm=None if a.yes else _confirm)
+    if cmd == "status":
+        root = gitutil.repo_root(Path.cwd())
+        prop, last = runner.proposal(root), (trace.read(runner._state(root)) or [{}])[-1]
+        print(f"Proposal waiting: {len(prop['changed'])} file(s) from the {prop['reason']} run of {prop['at']}; "
+              "`libraryan review`, then `libraryan approve` or `libraryan reject`" if prop else "No proposal waiting.")
+        print(f"Last run: {last.get('ts', 'never')} {last.get('reason', '')} {last.get('outcome', '')}".rstrip()
+              + "; report: .libraryan/state/reports/latest.md")
+        return 0
+    if cmd == "review":
+        print(runner.review_text(gitutil.repo_root(Path.cwd())))
+        return 0
+    if cmd == "approve":
+        root = gitutil.repo_root(Path.cwd())
+        return runner.approve(root, config.load(root))
+    if cmd == "reject":
+        return runner.reject(gitutil.repo_root(Path.cwd()))
     if cmd == "runtime":
         ap = argparse.ArgumentParser(prog="libraryan runtime")
         ap.add_argument("name", nargs="?")

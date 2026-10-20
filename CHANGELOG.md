@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.1 - 2026-10-20
+
+- Asks before committing (new default, `ask_before_commit: true`). `libraryan init` lists the files and asks before its install commit (`--yes` skips the question). A run saves its checked and reviewed changes as a proposal instead of committing: `libraryan status`, `libraryan review`, then `libraryan approve` or `libraryan reject`. While a proposal waits, no new model runs start. Set `"ask_before_commit": false` for automatic commits. Existing projects switch at `libraryan upgrade`.
+- A failed setup run now prints its reasons in the terminal, with the tool's own error message (for example "not logged in") and how to authenticate.
+
 ## 0.3.0 - 2026-10-20
 
 - Runtimes: the writer and the reviewer now run on Claude Code, Codex, Gemini, Qwen, Copilot, OpenCode or Cursor, or on any CLI through `runtime_command`. `libraryan init` detects an installed one (`--runtime NAME` to choose); `libraryan runtime [NAME] [--reviewer]` shows and switches it. Claude Code is stable; the others are experimental until smoke-tested.

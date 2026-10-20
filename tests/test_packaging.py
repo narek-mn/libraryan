@@ -76,7 +76,7 @@ else cat > '{fake}/table'; fi
 """)
     (fake / "crontab").chmod(0o755)
     env = {**os.environ, "PATH": f"{fake}{os.pathsep}{os.environ['PATH']}"}
-    r = subprocess.run([str(venv_bin / "libraryan"), "init", "--no-setup"], cwd=repo, capture_output=True,
+    r = subprocess.run([str(venv_bin / "libraryan"), "init", "--no-setup", "--yes"], cwd=repo, capture_output=True,
                        text=True, env=env)
     assert r.returncode == 0, r.stderr
     log = subprocess.run(["git", "log", "-1", "--format=%s"], cwd=repo, capture_output=True, text=True).stdout

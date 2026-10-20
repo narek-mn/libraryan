@@ -19,6 +19,9 @@ from .paths import is_machinery, is_protected, is_request
 STATE = ".libraryan/state"
 WORKTREE = ".libraryan/state/wt"
 FOREIGN = "owned paths changed in the checkout during the run"
+PROPOSAL = ".libraryan/state/proposal"
+PENDING_LINE = ("libraryan: a proposal is waiting for your approval: `libraryan review`, then `libraryan approve` "
+                "or `libraryan reject`")
 CAP_LINE = "Daily cap reached: {}; run `python3 .libraryan/bin/libraryan run` to override."
 SYMLINK_NOTE = ("CLAUDE.md is a symlink to AGENTS.md (or the reverse): leave the link as it is, never replace it "
                 "with a regular file, and no `@AGENTS.md` line is expected")
@@ -285,7 +288,8 @@ def _call_model(role: str, prompt: str, cwd: Path, cfg: dict, reason: str) -> tu
     usage.update(runtime=name, runtime_version=version, duration_ms=round((time.monotonic() - start) * 1000))  # wall clock
     if ok:
         return text, [], usage
-    tail = next((l.strip() for l in reversed(err.splitlines()) if l.strip()), "")[:300]
+    # the reason: the tool's last stderr line, else its own message (e.g. "Invalid API key · Please run /login")
+    tail = next((l.strip() for l in [*reversed(err.splitlines()), *text.splitlines()] if l.strip()), "")[:300]
     # e.g. budget exhausted mid-run (is_error): the work is not done, whatever the exit code
     return text, [f"{name} failed (exit {p.returncode})" + (f": {tail}" if tail else "")], usage
 
@@ -313,9 +317,114 @@ def _commit(root: Path, paths: list[str], reason: str, output: str) -> str | Non
         _sleep(2)
 
 
+def _propose(root: Path, wt: Path, work: dict, reason: str, changed: list[str], base: dict, output: str) -> None:
+    """Save the run's owned changes (the files themselves, so no git gc can lose them) for `libraryan approve`."""
+    d = Path(root) / PROPOSAL
+    shutil.rmtree(d, ignore_errors=True)
+    for p in changed:
+        if (wt / p).is_file():
+            (d / "files" / p).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(wt / p, d / "files" / p)
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "proposal.json").write_text(json.dumps({
+        "head": work["head"], "reason": reason, "changed": changed, "output": output,
+        "base": {p: base.get(p) for p in changed}, "at": time.strftime("%Y-%m-%d %H:%M", time.localtime(_now()))}))
+
+
+def proposal(root: Path) -> dict | None:
+    try:
+        return json.loads((Path(root) / PROPOSAL / "proposal.json").read_text())
+    except (OSError, ValueError):
+        return None
+
+
+def review_text(root: Path) -> str:
+    """The waiting proposal as a unified diff, for `libraryan review`."""
+    import difflib
+    prop = proposal(root)
+    if not prop:
+        return "No proposal waiting."
+    out = [f"Proposal from the {prop['reason']} run of {prop['at']} ({len(prop['changed'])} files):", ""]
+    for p in prop["changed"]:
+        old = (subprocess.run(["git", "cat-file", "blob", prop["base"][p]], cwd=root, capture_output=True,
+                              text=True).stdout if prop["base"].get(p) else "")
+        new_f = Path(root) / PROPOSAL / "files" / p
+        new = new_f.read_text(errors="replace") if new_f.is_file() else ""
+        if not new_f.is_file():
+            out.append(f"--- deleted: {p}")
+            continue
+        out += difflib.unified_diff(old.splitlines(), new.splitlines(), f"a/{p}" if prop["base"].get(p) else "/dev/null",
+                                    f"b/{p}", lineterm="")
+    return "\n".join([*out, "", prop["output"].strip()])
+
+
+def approve(root: Path, cfg: dict) -> int:
+    root, st = Path(root), _state(root)
+    prop = proposal(root)
+    if not prop:
+        print("libraryan: no proposal waiting", file=sys.stderr)
+        return 1
+    lock = _try_lock(st / "run.lock")
+    if lock is None:
+        print("libraryan: a run is in progress; try again when it finishes", file=sys.stderr)
+        return 1
+    with lock:
+        if not _on_default(root, cfg):
+            print(f"libraryan: check out `{cfg['default_branch']}` first", file=sys.stderr)
+            return 1
+        changed, base = prop["changed"], prop["base"]
+        if moved := [p for p in changed if _content_hash(root, p) != base.get(p)]:
+            print(f"libraryan: these files changed since the proposal: {', '.join(moved)}\n"
+                  "run `libraryan reject`, then `libraryan run` for a fresh proposal", file=sys.stderr)
+            return 1
+        applied = []
+        try:
+            for p in changed:
+                applied.append(p)
+                src, dest = root / PROPOSAL / "files" / p, root / p
+                if src.is_file():
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(src, dest)
+                else:
+                    dest.unlink(missing_ok=True)
+            err = _commit(root, changed, prop["reason"], prop["output"])
+        except BaseException:
+            gitutil.git(root, "reset", "-q", "--", *applied, check=False)
+            _restore(root, base, applied)
+            raise
+        if err:
+            gitutil.git(root, "reset", "-q", "--", *changed, check=False)
+            _restore(root, base, applied)
+            print(f"libraryan: {err}", file=sys.stderr)
+            return 1
+        shutil.rmtree(root / PROPOSAL)
+        _trace(st, prop["reason"], prop["head"], "committed", changed=changed, commit=gitutil.head(root))
+        print(f"Committed {len(changed)} file(s): {gitutil.head(root)[:7]} docs(libraryan): {prop['reason']} run")
+        return 0
+
+
+def reject(root: Path) -> int:
+    root, st = Path(root), _state(root)
+    prop = proposal(root)
+    if not prop:
+        print("libraryan: no proposal waiting", file=sys.stderr)
+        return 1
+    shutil.rmtree(root / PROPOSAL)
+    _trace(st, prop["reason"], prop["head"], "rejected", changed=prop["changed"])
+    print("Proposal discarded. Pending requests stay and are tried again at the next run.")
+    return 0
+
+
+def problems(root: Path) -> list[str]:
+    """The Problems section of the latest report (shown by init when the setup run fails)."""
+    text = _read(_state(root) / "reports/latest.md") or ""
+    sec = text.split("## Problems", 1)[1].split("\n\n", 1)[0] if "## Problems" in text else ""
+    return [l[2:] for l in sec.splitlines() if l.startswith("- ")]
+
+
 def _report(st: Path, reason: str, work: dict, changed: list[str], problems: list[str], output: str,
-            calls: list[dict] = (), ledger_lines: list[str] = (), latest: bool = True, ignored=()) -> None:
-    lines = [f"# Libraryan run: {reason}", "",
+            calls: list[dict] = (), ledger_lines: list[str] = (), latest: bool = True, ignored=(), note="") -> None:
+    lines = [f"# Libraryan run: {reason}", "", *([note.removeprefix("libraryan: ").capitalize(), ""] if note else []),
              f"- Requests: {', '.join(work['requests']) or 'none'}",
              f"- Commits since {work['since'] or '(none)'}: {work['commits']}",
              f"- Health check: {'yes' if work['health'] else 'no'}", "",
@@ -361,7 +470,7 @@ def cap_hit(st: Path, cfg: dict) -> str | None:
         return "max_commits_per_day"
     fails = all_fails = 0  # all_fails also counts transient failures (another agent's edit), at a higher threshold
     for r in reversed(trace.read(st)):  # trailing, across days
-        if r.get("outcome") in ("noop", "deferred", "capped", "audited"):
+        if r.get("outcome") in ("noop", "deferred", "capped", "audited", "pending", "rejected"):
             continue
         if r.get("outcome") not in ("failed", "aborted"):
             break
@@ -406,6 +515,10 @@ def run(root: Path, cfg: dict, reason: str, extra_paths=()) -> int:
             (st / "rerun").unlink(missing_ok=True)
             if not _on_default(root, cfg):
                 _trace(st, reason, _head_or_none(root), "deferred")
+                return 0
+            if (root / PROPOSAL).exists():  # no new (paid) work until the user approves or rejects the waiting one
+                print(PENDING_LINE, file=sys.stderr)
+                _trace(st, reason, _head_or_none(root), "pending")
                 return 0
             exempt = reason in ("manual", "setup")  # before promotion: a manual run stays manual
             promoted = (reason != "setup" and not (root / cfg["kb_root"].strip("/") / "index.md").exists()
@@ -503,7 +616,10 @@ def run(root: Path, cfg: dict, reason: str, extra_paths=()) -> int:
                     return 0
                 if changed and not problems and (f := foreign()):  # changed during the review
                     problems.append(f"{FOREIGN}: {', '.join(f)}")
-                if changed and not problems:
+                proposed = changed and not problems and cfg["ask_before_commit"]
+                if proposed:  # the user approves it later (`libraryan approve`); the checkout is not touched
+                    _propose(root, wt, work, reason, changed, base, output)
+                elif changed and not problems:
                     for p in changed:
                         applied.append(p)
                         _restore(root, after, [p])
@@ -535,9 +651,11 @@ def run(root: Path, cfg: dict, reason: str, extra_paths=()) -> int:
                 raise
             finally:
                 _drop_worktree(root, root / WORKTREE)
-            _report(st, reason, work, changed, problems, output, calls, parsed["lines"], ignored=strays)
-            _trace(st, reason, work["head"], "committed" if changed else "nothing_changed", calls, changed, deleted,
-                   commit=gitutil.head(root) if changed else None, findings=fnd)
+            _report(st, reason, work, changed, problems, output, calls, parsed["lines"], ignored=strays,
+                    note=PENDING_LINE if proposed else "")
+            _trace(st, reason, work["head"], "proposed" if proposed else "committed" if changed else "nothing_changed",
+                   calls, changed, deleted, commit=gitutil.head(root) if changed and not proposed else None,
+                   findings=fnd)
             (st / "last_processed").write_text(work["head"] + "\n")  # commits made during the run stay new work
             (st / "last_failed").unlink(missing_ok=True)
             if work["health"]:

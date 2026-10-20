@@ -335,7 +335,7 @@ footer a{color:var(--dim)}footer a:hover{color:var(--fg)}
   <div class="wrap">
     <p class="eyebrow">Quick start</p>
     <h2>Two commands. Then forget about it.</h2>
-    <p class="sub">From now on Libraryan updates the docs after your commits and checks them once a day. It commits locally and <strong>never pushes</strong>. Remove it at any time with <code>libraryan uninstall</code>; the docs stay.</p>
+    <p class="sub">From now on Libraryan updates the docs after your commits and checks them once a day. It <strong>asks before every commit</strong> (<code>libraryan review</code>, then <code>libraryan approve</code>) and <strong>never pushes</strong>. Remove it at any time with <code>libraryan uninstall</code>; the docs stay.</p>
     <div class="qs">
       <div class="panel">
         <h3>Terminal <small>Python 3.10+ · pipx · git · one agent CLI</small></h3>
@@ -364,7 +364,7 @@ footer a{color:var(--dim)}footer a:hover{color:var(--fg)}
       <details><summary>Why not just put "keep the docs updated" in CLAUDE.md?</summary><p>Because every agent then writes docs in its own style, at its own time, without checking them against the code. That instruction is how Markdown rot starts. Libraryan makes one writer responsible and enforces it with hooks, so the rule can't be skipped by accident.</p></details>
       <details><summary>What does it cost?</summary><p>You pay for your own model usage. A run happens only after commits, on request, or when the daily audit finds something. Quiet days are free. On Claude Code, hard caps apply per call (default $5 for a run, $25 for the first setup); other runtimes are bounded by a time limit and, where the tool has one, a turn cap. Daily caps apply to every runtime. <code>libraryan stats</code> shows the real spend.</p></details>
       <details><summary>Does it work with Cursor, Copilot, Gemini or Codex agents?</summary><p>Yes. The git pre-commit hook rejects any tool's commits to owned docs, the request rules are written into <code>AGENTS.md</code>, which those agents read, and the knowledge base is plain Markdown any model can use. Libraryan's own writer and reviewer run on Claude Code, Codex, Gemini, Qwen, Copilot, OpenCode or Cursor (or any CLI through a custom command); the non-Claude ones are experimental until smoke-tested.</p></details>
-      <details><summary>Will it push or open PRs?</summary><p>No. It commits locally, on your default branch only, under its own <code>docs(libraryan):</code> prefix. You decide when to push.</p></details>
+      <details><summary>Will it push or open PRs?</summary><p>No. By default it does not even commit without you: <code>libraryan approve</code> commits a proposal locally, on your default branch, under its own <code>docs(libraryan):</code> prefix. You decide when to push.</p></details>
       <details><summary>Can my teammates still change docs?</summary><p>Yes, by filing a request: a short Markdown file under <code>.libraryan/requests/</code>. Their agents learn how from the <code>libraryan-request</code> skill and <code>AGENTS.md</code>. You can also exempt paths in the config.</p></details>
     </div>
   </div>

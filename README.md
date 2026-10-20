@@ -53,7 +53,7 @@ cd your-project            # any git repo, on its default branch
 libraryan init             # once per project: installs, builds the KB, commits
 ```
 
-That's it. From now on Libraryan updates the docs after your commits and checks them once a day. It commits locally and **never pushes**. Remove it at any time with `libraryan uninstall`; the docs stay.
+That's it. From now on Libraryan updates the docs after your commits and checks them once a day. It **asks before every commit**: each run leaves a proposal you check with `libraryan review` and accept with `libraryan approve` (or turn on automatic commits). It **never pushes**. Remove it at any time with `libraryan uninstall`; the docs stay.
 
 <details>
 <summary><b>Or install as a Claude Code plugin</b></summary>
@@ -179,6 +179,8 @@ The writer and the reviewer each run on an agent CLI. `libraryan init` picks one
 |---|---|
 | `libraryan init` | Install into this repo and build the knowledge base |
 | `libraryan run` | Run now |
+| `libraryan status` / `review` | Is a proposal waiting, and what it would change |
+| `libraryan approve` / `reject` | Commit or discard the waiting proposal |
 | `libraryan runtime` | Show the agent CLIs in use and found; `libraryan runtime NAME [--reviewer]` switches |
 | `libraryan audit` | Docs-vs-code audit, no model call |
 | `libraryan stats` | Runs, commits, failures and cost per day |
@@ -207,7 +209,7 @@ Yes. The git pre-commit hook rejects any tool's commits to owned docs, the reque
 
 <details><summary><b>Will it push or open PRs?</b></summary>
 
-No. It commits locally, on your default branch only, under its own `docs(libraryan):` prefix. You decide when to push.
+No. By default it does not even commit without you: `libraryan approve` commits a proposal locally, on your default branch, under its own `docs(libraryan):` prefix. You decide when to push.
 </details>
 
 <details><summary><b>Can my teammates still change docs?</b></summary>

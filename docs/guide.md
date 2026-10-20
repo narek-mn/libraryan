@@ -33,7 +33,7 @@ Libraryan commits only on the default branch and never pushes.
 Owned files (default: all `**/*.md`, `.claude/skills/**`, `.cursor/rules/**`, `.github/copilot-instructions.md`) cannot be edited directly:
 each tool's edit guard blocks direct edits, and the pre-commit hook rejects commits touching them (deletions pass).
 To change docs, add a Markdown file under `.libraryan/requests/` (see the `libraryan-request` skill) and commit it.
-After a commit, Libraryan waits `debounce_minutes` for quiet, then runs and commits the doc updates.
+After a commit, Libraryan waits `debounce_minutes` for quiet, then runs. By default (`ask_before_commit: true`) a run that passes every check and the reviewer is saved as a **proposal**, not committed: `libraryan status` says one is waiting, `libraryan review` shows the diff, `libraryan approve` commits it and `libraryan reject` discards it (pending requests stay and are tried again). While a proposal waits, no new model runs start. `approve` refuses if a proposed file changed in the meantime; reject and run again. With `ask_before_commit: false`, runs commit directly.
 A failed run is retried only after the next commit or by `run` (see `reports/latest.md`); the daily health check is skipped when nothing was committed since the last one.
 Before any model call, Libraryan runs `libraryan audit` (below). A daily health check with no requests and no new commits ends there at no cost (outcome `audited`) when the audit finds nothing, or only findings the last completed model health run was already shown (kept in `state/last_health_findings.json`); a new finding gets a model run. When the agent verifies a `stale` note is still accurate it bumps the note's `updated` date, so the finding stops recurring.
 
@@ -67,7 +67,10 @@ Run `libraryan <cmd>` inside the project. The vendored `python3 .libraryan/bin/l
 | `audit` | Deterministic docs-vs-code audit, no model call, always exit 0 (see below) |
 | `stats [--days N]` | Per-day runs, model calls, commits, failures and cost from the run trace (default 7 days) |
 | `check` | Lint docs and scan for secrets; exit 1 on problems |
-| `init [--no-setup] [--runtime NAME]` | Install into this repo (global command only); the agent CLI is detected unless `--runtime` names it |
+| `init [--no-setup] [--runtime NAME] [--yes]` | Install into this repo (global command only); lists the files and asks before the install commit (`--yes`: don't ask); the agent CLI is detected unless `--runtime` names it |
+| `status` | Whether a proposal is waiting, and the last run's outcome |
+| `review` | The waiting proposal as a diff, plus the run summary |
+| `approve` / `reject` | Commit / discard the waiting proposal |
 | `runtime [NAME] [--reviewer]` | Show the agent CLIs in use and found, or switch the writer (or, with `--reviewer`, the reviewer) to NAME |
 | `upgrade` | Refresh the project's vendored copy, hooks, agents and skill from the installed version, and commit (the vendored bin runs the global `libraryan upgrade`) |
 | `uninstall` | Remove hooks, cron, agent files, `.libraryan/` and the AGENTS.md block; commit. The KB stays |
@@ -107,6 +110,7 @@ The project's git hooks, tool hooks and cron job use the vendored copy in `.libr
 | `max_usd_run` / `max_usd_setup` / `max_usd_review` | `5` / `25` / `2` | Per-call budget passed to `claude --max-budget-usd` (run, setup, reviewer); Claude Code only |
 | `max_usd_review_setup` | `10` | Reviewer budget on a setup run |
 | `max_turns_run` / `max_turns_setup` / `max_turns_review` | `60` / `200` / `30` | Turn caps, used only by runtimes without a USD cap |
+| `ask_before_commit` | `true` | Save each run as a proposal for `libraryan approve` instead of committing; `false`: commit directly |
 | `max_runs_per_day` | `24` | Daily cap on runs that call the model |
 | `max_commits_per_day` | `12` | Daily cap on Libraryan commits |
 | `max_consecutive_failures` | `3` | Stop automatic runs after this many failed or aborted runs in a row (transient failures excluded) |

@@ -292,7 +292,7 @@ def test_install_commit_leaves_other_dirty_files(repo):
     assert git(repo, "status", "--porcelain").stdout.strip() == "?? src.py"
 
 
-def test_init_with_setup_runs_runner_with_installer_files(repo, monkeypatch):
+def test_init_with_setup_runs_runner_with_installer_files(repo, monkeypatch, capsys):
     (repo / "docs/kb").mkdir(parents=True)
     (repo / "docs/kb/index.md").write_text("# Index\n")
     (repo / "src.py").write_text("x = 1\n")  # someone else's work in progress
@@ -300,6 +300,8 @@ def test_init_with_setup_runs_runner_with_installer_files(repo, monkeypatch):
     git(repo, "commit", "-m", "kb")
     monkeypatch.setattr(install.shutil, "which", lambda name: str(FAKE) if name == "claude" else None)
     assert install.init(repo, SRC, runtime="claude") == 0
+    assert "libraryan approve" in capsys.readouterr().out  # the setup run asks first
+    assert runner.approve(repo, config.load(repo)) == 0
     assert git(repo, "log", "-2", "--format=%s").stdout.split("\n")[:2] == [
         "docs(libraryan): setup run", "docs(libraryan): install"]
     installed = git(repo, "show", "--name-only", "--format=", "HEAD~1").stdout.split()
@@ -361,7 +363,8 @@ def test_cli_usage_lists_user_commands(capsys):
 def test_cli_init_no_setup(repo, monkeypatch):
     from libraryan import cli
     monkeypatch.chdir(repo)
-    assert cli.main(["init", "--no-setup"]) == 0
+    assert cli.main(["init", "--no-setup"]) == 1  # no terminal to ask in
+    assert cli.main(["init", "--no-setup", "--yes"]) == 0
     assert subject(repo) == "docs(libraryan): install"
     assert cli.main(["upgrade"]) == 0  # nothing changed: no commit
     assert subject(repo) == "docs(libraryan): install"
@@ -503,7 +506,22 @@ def test_init_setup_failure_prints_retry_hint(repo, monkeypatch, capsys):
     monkeypatch.setattr(install.shutil, "which", lambda name: "/nonexistent/claude" if name == "claude" else None)
     assert install.init(repo, SRC, runtime="claude") == 1
     assert subject(repo) == "docs(libraryan): install"
-    assert "run --reason setup" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "run --reason setup" in err and "could not start /nonexistent/claude" in err
+
+
+def test_cli_init_asks_before_the_install_commit(repo, monkeypatch, capsys):
+    from libraryan import cli
+    monkeypatch.chdir(repo)
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True, raising=False)
+    monkeypatch.setattr("builtins.input", lambda _: "n")
+    head = subject(repo)
+    assert cli.main(["init", "--no-setup", "--runtime", "claude"]) == 1
+    assert subject(repo) == head and not (repo / ".libraryan").exists()
+    assert ".libraryan/config.json" in capsys.readouterr().out
+    monkeypatch.setattr("builtins.input", lambda _: "y")
+    assert cli.main(["init", "--no-setup", "--runtime", "claude"]) == 0
+    assert subject(repo) == "docs(libraryan): install"
 
 
 def test_uninstall_refuses_dirty_targets(repo):

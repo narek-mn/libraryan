@@ -25,6 +25,7 @@ DEFAULTS = {
     "max_turns_run": 60,
     "max_turns_setup": 200,
     "max_turns_review": 30,
+    "ask_before_commit": True,
     "independent_review": True,
     "reviewer_model": None,
     "review_timeout_minutes": 15,

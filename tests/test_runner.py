@@ -36,6 +36,7 @@ def make_kb(repo, ignore_state=True, runtime="claude", monkeypatch=None):
         monkeypatch.setenv("FAKE_FORMAT", "text" if runtime == "command" else runtime)
         if runtime == "command":
             cfg["runtime_command"] = [sys.executable, str(FAKE_RUNTIME), "{prompt}"]
+    cfg["ask_before_commit"] = False  # the scenarios below test the commit path; ask mode has its own tests
     return cfg
 
 
@@ -1229,3 +1230,56 @@ def test_ignored_list_capped_in_report(tmp_path):
     runner._report(tmp_path, "manual", work, [], [], "", ignored=[f"src/f{i}.py" for i in range(250)])
     text = (tmp_path / "reports/latest.md").read_text()
     assert "- src/f199.py\n- 50 more in src/" in text and "f200" not in text
+
+
+def test_ask_mode_proposes_then_approve_commits(repo, capsys, monkeypatch):
+    cfg = {**make_kb(repo), "ask_before_commit": True}
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "gitrm")  # also deletes the processed request
+    add_request(repo)
+    git(repo, "add", "-A")
+    before = libraryan_commits(repo)
+    assert runner.run(repo, cfg, "manual") == 0
+    assert libraryan_commits(repo) == before and (repo / "docs/kb/index.md").read_text() == "# Index\n"
+    assert (repo / ".libraryan/requests/20261019-120000-x.md").exists()
+    assert "--- deleted: .libraryan/requests/20261019-120000-x.md" in runner.review_text(repo)
+    assert "libraryan approve" in (state(repo) / "reports/latest.md").read_text()
+    assert last_trace(repo)["outcome"] == "proposed"
+    assert "+- updated by fake claude" in runner.review_text(repo)
+    (state(repo) / "fake_claude_ran").unlink()
+    assert runner.run(repo, cfg, "manual") == 0  # waiting: no new paid run
+    assert not (state(repo) / "fake_claude_ran").exists() and last_trace(repo)["outcome"] == "pending"
+    assert "libraryan review" in capsys.readouterr().err
+    assert runner.approve(repo, cfg) == 0
+    assert libraryan_commits(repo) == ["docs(libraryan): manual run", *before]
+    assert "updated by fake claude" in (repo / "docs/kb/index.md").read_text()
+    assert not (repo / ".libraryan/requests/20261019-120000-x.md").exists()
+    assert runner.proposal(repo) is None and git(repo, "status", "--porcelain") == ""
+
+
+def test_reject_discards_proposal(repo):
+    cfg = {**make_kb(repo), "ask_before_commit": True}
+    add_request(repo)
+    git(repo, "add", "-A")
+    runner.run(repo, cfg, "manual")
+    assert runner.reject(repo) == 0
+    assert runner.proposal(repo) is None and (repo / "docs/kb/index.md").read_text() == "# Index\n"
+    assert runner.review_text(repo) == "No proposal waiting." and runner.approve(repo, cfg) == 1
+
+
+def test_approve_refuses_when_file_changed_since(repo):
+    cfg = {**make_kb(repo), "ask_before_commit": True}
+    add_request(repo)
+    git(repo, "add", "-A")
+    runner.run(repo, cfg, "manual")
+    (repo / "docs/kb/index.md").write_text("# Index\nmine\n")
+    assert runner.approve(repo, cfg) == 1
+    assert (repo / "docs/kb/index.md").read_text() == "# Index\nmine\n" and runner.proposal(repo)
+
+
+def test_tool_error_message_reaches_the_problem(repo, monkeypatch):
+    cfg = make_kb(repo)
+    add_request(repo)
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "is_error")
+    monkeypatch.setenv("FAKE_CLAUDE_EXTRA", "Invalid API key")
+    assert runner.run(repo, cfg, "manual") == 1
+    assert any("claude failed" in p and "SUMMARY ok" in p for p in runner.problems(repo))
