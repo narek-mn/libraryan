@@ -13,7 +13,14 @@ license-files = ["LICENSE"]
 authors = [{name = "narek-mn"}]
 keywords = ["claude-code", "agent", "documentation", "knowledge-base", "markdown", "llm"]
 classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Operating System :: POSIX :: Linux",
     "Operating System :: MacOS",
     "Environment :: Console",
@@ -23,6 +30,7 @@ classifiers = [
 
 [project.urls]
 Homepage = "https://github.com/narek-mn/libraryan"
+Documentation = "https://github.com/narek-mn/libraryan/blob/main/docs/guide.md"
 Repository = "https://github.com/narek-mn/libraryan"
 Issues = "https://github.com/narek-mn/libraryan/issues"
 Changelog = "https://github.com/narek-mn/libraryan/blob/main/CHANGELOG.md"

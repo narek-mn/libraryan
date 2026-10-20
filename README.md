@@ -4,6 +4,7 @@
 
 <p align="center">
   <a href="https://github.com/narek-mn/libraryan/actions/workflows/test.yml"><img src="https://github.com/narek-mn/libraryan/actions/workflows/test.yml/badge.svg" alt="tests"></a>
+  <a href="https://pypi.org/project/libraryan/"><img src="https://img.shields.io/pypi/v/libraryan?color=3fb950" alt="PyPI"></a>
   <img src="https://img.shields.io/badge/python-3.10%2B-3776ab" alt="Python 3.10+">
   <img src="https://img.shields.io/badge/dependencies-0-3fb950" alt="zero dependencies">
   <img src="https://img.shields.io/badge/Claude%20Code-agent%20%2B%20plugin-d97757" alt="Claude Code agent and plugin">
@@ -51,8 +52,6 @@ pipx install libraryan     # once per machine
 cd your-project            # any git repo, on its default branch
 libraryan init             # once per project: installs, builds the KB, commits
 ```
-
-> **Not on PyPI yet?** Use `pipx install git+https://github.com/narek-mn/libraryan`.
 
 That's it. From now on Libraryan updates the docs after your commits and checks them once a day. It commits locally and **never pushes**. Remove it at any time with `libraryan uninstall`; the docs stay.
 
