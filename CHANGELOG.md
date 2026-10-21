@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Every command that commits now asks first. `libraryan upgrade`, `libraryan uninstall` and `libraryan runtime NAME` list the files and ask "Commit these? [y/N]", like `init`; "no" leaves the project unchanged. `--yes` skips the question; without a terminal they stop and say to use `--yes`.
+
 ## 0.3.1 - 2026-10-20
 
 - Asks before committing (new default, `ask_before_commit: true`). `libraryan init` lists the files and asks before its install commit (`--yes` skips the question). A run saves its checked and reviewed changes as a proposal instead of committing: `libraryan status`, `libraryan review`, then `libraryan approve` or `libraryan reject`. While a proposal waits, no new model runs start. Set `"ask_before_commit": false` for automatic commits. Existing projects switch at `libraryan upgrade`.

@@ -71,9 +71,9 @@ Run `libraryan <cmd>` inside the project. The vendored `python3 .libraryan/bin/l
 | `status` | Whether a proposal is waiting, and the last run's outcome |
 | `review` | The waiting proposal as a diff, plus the run summary |
 | `approve` / `reject` | Commit / discard the waiting proposal |
-| `runtime [NAME] [--reviewer]` | Show the agent CLIs in use and found, or switch the writer (or, with `--reviewer`, the reviewer) to NAME |
-| `upgrade` | Refresh the project's vendored copy, hooks, agents and skill from the installed version, and commit (the vendored bin runs the global `libraryan upgrade`) |
-| `uninstall` | Remove hooks, cron, agent files, `.libraryan/` and the AGENTS.md block; commit. The KB stays |
+| `runtime [NAME] [--reviewer] [--yes]` | Show the agent CLIs in use and found, or switch the writer (or, with `--reviewer`, the reviewer) to NAME; asks before the commit (`--yes`: don't ask) |
+| `upgrade [--yes]` | Refresh the project's vendored copy, hooks, agents and skill from the installed version; lists the changed files and asks before the commit, and "no" undoes the refresh (`--yes`: don't ask; the vendored bin runs the global `libraryan upgrade`) |
+| `uninstall [--yes]` | Lists the files, asks, then removes hooks, cron, agent files, `.libraryan/` and the AGENTS.md block and commits (`--yes`: don't ask). The KB stays |
 
 Internal (called by hooks/cron): `precommit`, `postcommit`, `guard`, `ensure-hooks`, `chainpath`.
 `libraryan --version` prints the installed version.

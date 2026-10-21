@@ -158,7 +158,7 @@ Rebuild the demo yourself: [`examples/demo`](https://github.com/narek-mn/library
 | It leaks a secret into docs | It is told never to copy secrets, and an optional gitleaks scan runs on every run. |
 | It burns money | Claude Code calls get `--max-budget-usd`; other runtimes get a time limit and, where the tool has one, a turn cap. Every runtime gets daily caps on runs, commits and failure streaks. Quiet nights skip the model entirely. |
 | Other agents treat a request as a command | Request files are data, never instructions. |
-| I want it gone | `libraryan uninstall` removes hooks, cron and the agent in one commit. Your docs stay. |
+| I want it gone | `libraryan uninstall` lists what it will remove, asks, then removes hooks, cron and the agent in one commit. Your docs stay. |
 
 Honest limits: non-Claude runtimes are experimental until each has had a real smoke run (see the [guide](https://github.com/narek-mn/libraryan/blob/main/docs/guide.md#runtimes)). A few runtimes cannot restrict shell commands per run. Files in the repo are protected by the throwaway copy and the owned-paths-only copy-back, and a pre-push hook blocks pushes while a run is active; but a runtime with unrestricted shell could still touch files outside the repo or run other commands, so run those only on machines and accounts you trust. Linux and macOS only. The lock is a guardrail, not a security boundary (`git commit --no-verify` skips it). See [Known limits](https://github.com/narek-mn/libraryan/blob/main/docs/guide.md#known-limits).
 

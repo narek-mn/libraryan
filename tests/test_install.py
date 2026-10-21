@@ -368,7 +368,9 @@ def test_cli_init_no_setup(repo, monkeypatch):
     assert subject(repo) == "docs(libraryan): install"
     assert cli.main(["upgrade"]) == 0  # nothing changed: no commit
     assert subject(repo) == "docs(libraryan): install"
-    assert cli.main(["uninstall"]) == 0
+    assert cli.main(["uninstall"]) == 1  # no terminal to ask in
+    assert subject(repo) == "docs(libraryan): install" and (repo / ".libraryan").exists()
+    assert cli.main(["uninstall", "--yes"]) == 0
     assert subject(repo) == "docs(libraryan): uninstall"
 
 
@@ -388,7 +390,7 @@ def test_vendored_cli_uninstall(repo):
     old = Path.cwd()
     os.chdir(repo)
     try:
-        assert cli.main(["uninstall"]) == 0
+        assert cli.main(["uninstall", "--yes"]) == 0
     finally:
         os.chdir(old)
     assert not (repo / ".libraryan").exists()
@@ -405,7 +407,7 @@ def test_vendored_cli_upgrade_runs_global_command(repo, tmp_path_factory):
         f"#!/bin/sh\nexec python3 -c 'import sys; sys.path.insert(0, \"{SRC.parent}\"); "
         "from libraryan.cli import entry; entry()' \"$@\"\n")
     (tmp / "pathbin/libraryan").chmod(0o755)
-    r = subprocess.run(["python3", ".libraryan/bin/libraryan", "upgrade"], cwd=repo, capture_output=True,
+    r = subprocess.run(["python3", ".libraryan/bin/libraryan", "upgrade", "--yes"], cwd=repo, capture_output=True,
                        text=True, env=env)
     assert r.returncode == 0, r.stderr
     assert subject(repo) == "docs(libraryan): upgrade"
@@ -649,3 +651,31 @@ def test_uninstall_with_invalid_hook_file_changes_nothing(repo, fake_crontab):
     assert git(repo, "config", "core.hooksPath").stdout.strip() == install.HOOKS_PATH
     assert fake_crontab.read_text() == cron and START in (repo / "AGENTS.md").read_text()
     assert (repo / ".libraryan").is_dir() and git(repo, "status", "--porcelain").stdout == ""
+
+
+def stale_install(repo):
+    install.init(repo, SRC, run_setup=False)
+    (repo / ".libraryan/libraryan/gone.py").write_text("# removed upstream\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "stale", env={"LIBRARYAN": "1"})
+
+
+def test_upgrade_asks_and_no_changes_nothing(repo, capsys):
+    stale_install(repo)
+    head, asked = git(repo, "rev-parse", "HEAD").stdout, []
+    assert install.upgrade(repo, SRC, confirm=lambda files: asked.append(files) or False) == 1
+    assert asked == [[".libraryan/libraryan/gone.py"]]
+    assert git(repo, "rev-parse", "HEAD").stdout == head and git(repo, "status", "--porcelain").stdout == ""
+    assert "upgrade cancelled" in capsys.readouterr().err
+    assert install.upgrade(repo, SRC, confirm=lambda files: True) == 0
+    assert subject(repo) == "docs(libraryan): upgrade"
+
+
+def test_uninstall_asks_first_and_no_changes_nothing(repo, fake_crontab):
+    install.init(repo, SRC, run_setup=False)
+    head, hooks = git(repo, "rev-parse", "HEAD").stdout, git(repo, "config", "core.hooksPath").stdout
+    asked = []
+    assert install.uninstall(repo, confirm=lambda files: asked.append(files) or False) == 1
+    assert ".libraryan/config.json" in asked[0]
+    assert git(repo, "rev-parse", "HEAD").stdout == head and git(repo, "status", "--porcelain").stdout == ""
+    assert git(repo, "config", "core.hooksPath").stdout == hooks and (repo / ".libraryan").exists()

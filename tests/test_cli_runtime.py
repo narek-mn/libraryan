@@ -59,24 +59,24 @@ def test_runtime_command_lists_found(repo, monkeypatch, tmp_path, capsys):
 
 def test_runtime_switch_commits_config(repo, monkeypatch, tmp_path, capsys):
     installed(repo, monkeypatch, tmp_path, "claude", "codex")
-    assert cli.main(["runtime", "codex"]) == 0
+    assert cli.main(["runtime", "codex", "--yes"]) == 0
     cfg = config.load(repo)
     assert cfg["runtime"] == "codex" and cfg["runtime_bin"] == str(tmp_path.parent / (tmp_path.name + "-fakebin") / "codex")
     assert git(repo, "log", "-1", "--format=%s").strip() == "docs(libraryan): runtime codex"
     assert git(repo, "status", "--porcelain") == ""
     capsys.readouterr()
-    assert cli.main(["runtime", "gemini"]) == 1
+    assert cli.main(["runtime", "gemini", "--yes"]) == 1
     assert "gemini not found on PATH; install it first: " + runtimes.get("gemini").INSTALL in capsys.readouterr().err
-    assert cli.main(["runtime", "bogus"]) == 1 and cli.main(["runtime", "command"]) == 1
+    assert cli.main(["runtime", "bogus", "--yes"]) == 1 and cli.main(["runtime", "command", "--yes"]) == 1
 
 
 def test_runtime_switch_reviewer_only(repo, monkeypatch, tmp_path):
     installed(repo, monkeypatch, tmp_path, "claude", "codex")
-    assert cli.main(["runtime", "codex", "--reviewer"]) == 0
+    assert cli.main(["runtime", "codex", "--reviewer", "--yes"]) == 0
     cfg = config.load(repo)
     assert (cfg["runtime"], cfg["reviewer_runtime"]) == ("claude", "codex")
     assert cfg["reviewer_runtime_bin"] == str(tmp_path.parent / (tmp_path.name + "-fakebin") / "codex")
-    assert cli.main(["runtime", "claude", "--reviewer"]) == 0  # same as the writer: cleared
+    assert cli.main(["runtime", "claude", "--reviewer", "--yes"]) == 0  # same as the writer: cleared
     cfg = config.load(repo)
     assert cfg["reviewer_runtime"] is None and cfg["reviewer_runtime_bin"] is None
 
@@ -108,7 +108,7 @@ def test_trace_records_runtime_version(repo):
 def test_runtime_switch_refuses_when_not_installed(repo, monkeypatch, tmp_path, capsys):
     fake_tools(monkeypatch, tmp_path, "codex")
     monkeypatch.chdir(repo)
-    assert cli.main(["runtime", "codex"]) == 1
+    assert cli.main(["runtime", "codex", "--yes"]) == 1
     assert "not installed here; run: libraryan init" in capsys.readouterr().err
 
 
@@ -117,7 +117,7 @@ def test_runtime_switch_refuses_dirty_tree(repo, monkeypatch, tmp_path, capsys):
     (repo / ".libraryan/requests").mkdir(exist_ok=True)
     (repo / ".libraryan/requests/x.md").write_text("pending\n")
     before = (repo / config.CONFIG_PATH).read_text()
-    assert cli.main(["runtime", "codex"]) == 1
+    assert cli.main(["runtime", "codex", "--yes"]) == 1
     assert "commit or stash" in capsys.readouterr().err
     assert (repo / config.CONFIG_PATH).read_text() == before
 
@@ -155,5 +155,16 @@ def test_failed_runtime_switch_leaves_nothing_staged(repo, monkeypatch, tmp_path
         return 1
 
     monkeypatch.setattr(install, "_commit", fail)
-    assert cli.main(["runtime", "codex"]) == 1
+    assert cli.main(["runtime", "codex", "--yes"]) == 1
     assert git(repo, "status", "--porcelain") == "" and config.load(repo)["runtime"] == "claude"
+
+
+def test_runtime_switch_asks_and_no_changes_nothing(repo, monkeypatch, tmp_path, capsys):
+    installed(repo, monkeypatch, tmp_path, "claude", "codex")
+    head, before = git(repo, "rev-parse", "HEAD"), (repo / config.CONFIG_PATH).read_text()
+    assert cli.main(["runtime", "codex"]) == 1  # no terminal to ask in
+    monkeypatch.setattr(cli, "_confirm", lambda files: files == [config.CONFIG_PATH] and False)
+    assert cli.main(["runtime", "codex"]) == 1
+    assert git(repo, "rev-parse", "HEAD") == head and (repo / config.CONFIG_PATH).read_text() == before
+    assert git(repo, "status", "--porcelain") == ""
+    assert "runtime codex cancelled" in capsys.readouterr().err

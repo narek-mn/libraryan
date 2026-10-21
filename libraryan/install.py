@@ -161,6 +161,13 @@ def _files(project: Path) -> list[str]:
     return sorted({p for p in (now + "\0" + head).split("\0") if p})
 
 
+def _changed(project: Path) -> list[str]:
+    """Installer files that differ from HEAD: what an upgrade would commit."""
+    out = (gitutil.git(project, "diff", "-z", "--name-only", "HEAD", "--", *PATHS) + "\0"
+           + gitutil.git(project, "ls-files", "-z", "-o", "--exclude-standard", "--", *PATHS))
+    return sorted({p for p in out.split("\0") if p})
+
+
 def _commit(project: Path, what: str, cfg: dict) -> int:
     """Commit only the installer's files. No hooks: existing docs' lint problems are the setup run's job and
     the user's linters must not judge vendored code; secrets are scanned here instead."""
@@ -309,7 +316,8 @@ def _version(v: str) -> tuple:
         return ()
 
 
-def upgrade(project: Path, source: Path = PKG) -> int:
+def upgrade(project: Path, source: Path = PKG, confirm=None) -> int:
+    """`confirm(files)` asks the user before the upgrade commit (the CLI passes one; None: no question)."""
     project = Path(project)
     if not (project / config.CONFIG_PATH).is_file():
         print("libraryan: not installed here; run: libraryan init", file=sys.stderr)
@@ -330,16 +338,24 @@ def upgrade(project: Path, source: Path = PKG) -> int:
     cfg.pop("source_path", None)  # pre-0.2 key: an absolute path on someone's machine
     cfg["installed_version"] = __version__
     config.save(project, cfg)  # adds keys new in DEFAULTS, keeps existing values
+    if confirm and (changed := _changed(project)) and not confirm(changed):
+        _rollback(project)  # installer paths were clean (`_dirty`), so HEAD is their pre-upgrade state
+        print("libraryan: upgrade cancelled; nothing was changed", file=sys.stderr)
+        return 1
     return _commit(project, "upgrade", cfg)
 
 
-def uninstall(project: Path) -> int:
+def uninstall(project: Path, confirm=None) -> int:
+    """`confirm(files)` asks the user before anything changes (the CLI passes one; None: no question)."""
     project = Path(project)
     cfg = config.load(project)
     if _dirty(project, cfg, docs=False):  # includes untracked requests, which rmtree would destroy
         return 1
     docs = _read_hook_files(project)
     if docs is None:  # before anything changes, so uninstall never stops halfway
+        return 1
+    if confirm and not confirm(_files(project)):
+        print("libraryan: uninstall cancelled; nothing was changed", file=sys.stderr)
         return 1
     if cfg["chain_hooks_path"]:
         gitutil.git(project, "config", "--local", "core.hooksPath", cfg["chain_hooks_path"])

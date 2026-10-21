@@ -15,14 +15,15 @@ USAGE = """usage: libraryan <command>
                       install into this git repo and run the setup (--no-setup: install only;
                       the agent CLI is picked automatically unless --runtime says which;
                       --yes: do not ask before the install commit)
+  (init, runtime NAME, upgrade and uninstall list the files and ask before they commit; --yes skips that)
   status              is a proposal waiting? last run's outcome
   review              show what the waiting proposal would change
   approve             commit the waiting proposal
   reject              discard the waiting proposal
-  runtime [NAME] [--reviewer]
+  runtime [NAME] [--reviewer] [--yes]
                       show the agent CLIs in use and found, or switch to NAME
-  upgrade             refresh the project's vendored copy from this installed version
-  uninstall           remove Libraryan (the knowledge base stays)
+  upgrade [--yes]     refresh the project's vendored copy from this installed version
+  uninstall [--yes]   remove Libraryan (the knowledge base stays)
   run [--reason R]    run now (default reason: manual)
   wait                wait out the debounce window, then run
   check               lint docs and scan for secrets
@@ -36,7 +37,7 @@ PACKAGED = (install.PKG / "_templates").is_dir()  # False in a project's vendore
 def _confirm(files: list[str]) -> bool:
     print("Libraryan will commit these files:\n  " + "\n  ".join(files))
     if not sys.stdin.isatty():
-        print("libraryan: no terminal to ask in; rerun with --yes to install without asking", file=sys.stderr)
+        print("libraryan: no terminal to ask in; rerun with --yes to commit without asking", file=sys.stderr)
         return False
     return input("Commit these? [y/N] ").strip().lower() in ("y", "yes")
 
@@ -64,19 +65,26 @@ def _guard() -> int:
     return code
 
 
-def _upgrade() -> int:
+def _yes(prog: str, argv: list[str]) -> bool:
+    ap = argparse.ArgumentParser(prog=prog)
+    ap.add_argument("--yes", action="store_true", help="do not ask before the commit")
+    return ap.parse_args(argv).yes
+
+
+def _upgrade(argv: list[str]) -> int:
     root = gitutil.repo_root(Path.cwd())
+    yes = _yes("libraryan upgrade", argv)
     if PACKAGED:
-        return install.upgrade(root)
+        return install.upgrade(root, confirm=None if yes else _confirm)
     # vendored copy: the installed tool holds the new version; the env guard stops a vendored bin on PATH looping
     exe = None if os.environ.get("LIBRARYAN_UPGRADING") else shutil.which("libraryan")
     if not exe:
         print("libraryan: install the tool first: pipx install libraryan", file=sys.stderr)
         return 1
-    return subprocess.run([exe, "upgrade"], cwd=root, env={**os.environ, "LIBRARYAN_UPGRADING": "1"}).returncode
+    return subprocess.run([exe, "upgrade", *(["--yes"] if yes else [])], cwd=root, env={**os.environ, "LIBRARYAN_UPGRADING": "1"}).returncode
 
 
-def _runtime(root: Path, name: str | None, reviewer: bool) -> int:
+def _runtime(root: Path, name: str | None, reviewer: bool, confirm=None) -> int:
     if name and not (root / config.CONFIG_PATH).is_file():
         print("libraryan: not installed here; run: libraryan init", file=sys.stderr)
         return 1
@@ -115,6 +123,10 @@ def _runtime(root: Path, name: str | None, reviewer: bool) -> int:
     cfg[key], cfg[key + "_bin"] = name, path
     old = (root / config.CONFIG_PATH).read_text()
     config.save(root, cfg)
+    if confirm and not confirm([config.CONFIG_PATH]):
+        (root / config.CONFIG_PATH).write_text(old)
+        print(f"libraryan: {what} cancelled; nothing was changed", file=sys.stderr)
+        return 1
     code = install._commit(root, what, cfg)
     if code:  # _commit may have staged it
         gitutil.git(root, "reset", "-q", "--", config.CONFIG_PATH, check=False)
@@ -161,8 +173,9 @@ def main(argv: list[str]) -> int:
         ap = argparse.ArgumentParser(prog="libraryan runtime")
         ap.add_argument("name", nargs="?")
         ap.add_argument("--reviewer", action="store_true", help="switch the reviewer's tool only")
+        ap.add_argument("--yes", action="store_true", help="do not ask before the commit")
         a = ap.parse_args(argv[1:])
-        return _runtime(gitutil.repo_root(Path.cwd()), a.name, a.reviewer)
+        return _runtime(gitutil.repo_root(Path.cwd()), a.name, a.reviewer, None if a.yes else _confirm)
     if cmd == "precommit":
         return _precommit()
     if cmd == "guard":
@@ -215,9 +228,10 @@ def main(argv: list[str]) -> int:
             print(f"libraryan audit failed: {e}", file=sys.stderr)
         return 0
     if cmd == "upgrade":
-        return _upgrade()
+        return _upgrade(argv[1:])
     if cmd == "uninstall":
-        return install.uninstall(gitutil.repo_root(Path.cwd()))
+        return install.uninstall(gitutil.repo_root(Path.cwd()),
+                                 confirm=None if _yes("libraryan uninstall", argv[1:]) else _confirm)
     print(USAGE, file=sys.stderr)
     return 2
 
