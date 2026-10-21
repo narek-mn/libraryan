@@ -11,7 +11,7 @@ requires-python = ">=3.10"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{name = "narek-mn"}]
-keywords = ["claude-code", "agent", "documentation", "knowledge-base", "markdown", "llm"]
+keywords = ["ai-agents", "coding-agents", "llm", "documentation", "docs-as-code", "markdown", "knowledge-base", "agents-md", "claude-code", "codex", "cursor", "gemini-cli", "github-copilot", "git-hooks", "pre-commit", "developer-tools", "cli"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
