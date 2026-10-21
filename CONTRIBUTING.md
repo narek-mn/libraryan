@@ -1,6 +1,6 @@
 # Contributing to Libraryan
 
-Thanks for helping out! Libraryan is small on purpose, so contributions stay easy to review.
+Thanks for helping out! Libraryan is small on purpose: two commands. Please keep it that way.
 
 ## Dev setup
 
@@ -20,16 +20,16 @@ python3 -m pytest -q
 
 ## Project layout
 
-- `libraryan/` - the installed tool (CLI, runner, checks, audit, install logic).
-- `libraryan/_runtime/` - the runtime vendored into each project's `.libraryan/` by `init`/`upgrade`.
-- `libraryan/_templates/` - agent and skill templates written into projects.
-- `tests/` - the test suite.
-- `docs/superpowers/` - design specs and implementation plans.
+- `libraryan/check.py` - `libraryan check`: broken links and missing paths, no AI.
+- `libraryan/fix.py` - `libraryan fix`: runs Claude Code in a throwaway worktree and copies doc changes back.
+- `libraryan/instructions.py` - what the agent is told.
+- `libraryan/ledger.py` - checks that deleted docs' facts went somewhere.
+- `tests/` - the test suite. `tests/fake_claude.py` stands in for Claude Code.
 
 ## Rules
 
 - Python 3.10+, standard library only. No new dependencies.
-- Unix only (Linux and macOS); Claude Code is the only supported runtime.
+- Unix only (Linux and macOS). Claude Code is the only supported agent.
 - Tests must never call the real `claude`. Stub it.
 - Keep commits small and focused. Use conventional-style messages: `feat: ...`, `fix: ...`, `docs: ...`, `build: ...`.
 - If behaviour changes, update `README.md` and add a `CHANGELOG.md` entry.

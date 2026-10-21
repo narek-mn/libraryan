@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.0 - 2026-10-21
+
+A rewrite: Libraryan is now two commands you run when you want, and it installs nothing into your project.
+
+- `libraryan check`: broken links and file paths that no longer exist, in every doc. Free, no AI, changes nothing; exit code 1 when it finds something.
+- `libraryan fix [--since REF] [--budget USD] [--model M]`: Claude Code fixes the docs in a throwaway worktree; only `.md` changes come back, uncommitted. A deleted doc must pass the deletion ledger or it is put back. Shows a live progress line and the cost.
+- Removed: `init`, `upgrade`, `uninstall`, the single-writer lock and git hooks, the scheduled job, requests, proposals (`status`/`review`/`approve`/`reject`), `run`, `wait`, `audit`, `stats`, `runtime`, the config file, the forced `docs/kb` layout, the second reviewer agent, the Codex/Gemini/Qwen/Copilot/OpenCode/Cursor/custom runtimes and the Claude Code plugin.
+- Upgrading from 0.3: run `python3 .libraryan/bin/libraryan uninstall` in each project first.
+
 ## 0.3.2 - 2026-10-21
 
 - A person approves every docs commit. `ask_before_commit` can no longer be turned off; a stored `false` is ignored.

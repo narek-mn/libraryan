@@ -33,8 +33,8 @@ body:
   - type: textarea
     id: report
     attributes:
-      label: Latest report excerpt
+      label: Output
       description: |
-        Relevant part of `.libraryan/state/reports/latest.md`.
+        What `libraryan check` or `libraryan fix` printed.
         Remove secrets, tokens and private paths before pasting.
       render: markdown

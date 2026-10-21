@@ -4,14 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "libraryan"
-version = "0.3.2"
-description = "A vendor-neutral docs agent: the only writer of a git project's Markdown knowledge base; every other agent files a request"
+version = "0.4.0"
+description = "Keep your Markdown docs true to your code: a free checker and an AI fixer that never commits"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{name = "narek-mn"}]
-keywords = ["ai-agents", "coding-agents", "llm", "documentation", "docs-as-code", "markdown", "knowledge-base", "agents-md", "claude-code", "codex", "cursor", "gemini-cli", "github-copilot", "git-hooks", "pre-commit", "developer-tools", "cli"]
+keywords = ["ai-agents", "coding-agents", "llm", "documentation", "docs-as-code", "markdown", "broken-links", "agents-md", "claude-code", "developer-tools", "cli"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -30,7 +30,6 @@ classifiers = [
 
 [project.urls]
 Homepage = "https://github.com/narek-mn/libraryan"
-Documentation = "https://github.com/narek-mn/libraryan/blob/main/docs/guide.md"
 Repository = "https://github.com/narek-mn/libraryan"
 Issues = "https://github.com/narek-mn/libraryan/issues"
 Changelog = "https://github.com/narek-mn/libraryan/blob/main/CHANGELOG.md"
@@ -39,7 +38,4 @@ Changelog = "https://github.com/narek-mn/libraryan/blob/main/CHANGELOG.md"
 libraryan = "libraryan.cli:entry"
 
 [tool.setuptools]
-packages = ["libraryan", "libraryan.runtimes"]
-
-[tool.setuptools.package-data]
-libraryan = ["_runtime/**/*", "_templates/**/*"]
+packages = ["libraryan"]

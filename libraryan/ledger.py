@@ -1,24 +1,21 @@
-"""Deletion ledger: where each deleted owned doc's facts went (spec §5.1)."""
+"""Deletion ledger: a doc is deleted only when the agent shows, with quotes we can check, where its facts went."""
 import difflib
 import re
-import subprocess
 from pathlib import Path
-
-from .paths import is_protected
 
 MOVED = re.compile(r"^Moved: `?(.+?)`? => `?(.+?)`?\s*$")
 FACT = re.compile(r"^Fact: `?(.+?)`? => `?(.+?)`? \| (.+?)\s*$")
 MIN_QUOTE = 15
 
 
-def clean(line: str) -> str:
-    """A model output line without a list bullet or wrapping backticks."""
+def _clean(line: str) -> str:
+    """A line without a list bullet or wrapping backticks."""
     line = re.sub(r"^[-*+]\s+", "", line.strip())
     return line[1:-1].strip() if len(line) > 1 and line[0] == line[-1] == "`" else line
 
 
 def _unquote(s: str) -> str:
-    return s.strip().strip("\"\u201c\u201d'`").strip()
+    return s.strip().strip("\"“”'`").strip()
 
 
 def _norm(s: str) -> str:
@@ -27,8 +24,7 @@ def _norm(s: str) -> str:
 
 def parse(text: str) -> dict:
     out = {"moved": {}, "facts": [], "none": {}, "lines": []}
-    for line in text.splitlines():
-        line = clean(line)
+    for line in map(_clean, text.splitlines()):
         if m := MOVED.match(line):
             out["moved"][m[1]] = m[2]
         elif m := FACT.match(line):
@@ -47,60 +43,43 @@ def parse(text: str) -> dict:
 
 def _read(root: Path, path: str) -> str | None:
     f = Path(root) / path
-    return f.read_text(errors="replace") if f.is_file() else None
+    return f.read_text(errors="replace") if path.endswith(".md") and f.is_file() else None
 
 
-def _head(root: Path, path: str) -> str:
-    return subprocess.run(["git", "show", f"HEAD:{path}"], cwd=root, capture_output=True).stdout.decode(
-        errors="replace")
-
-
-def _dest_problem(root: Path, cfg: dict, dest: str) -> str | None:
-    if not is_protected(dest, cfg):
-        return f"{dest} is not owned by Libraryan"
-    if _read(root, dest) is None:
-        return f"{dest} does not exist"
-    return None
-
-
-def _fact_problem(root: Path, cfg: dict, fact: dict, original: str) -> str | None:
-    if err := _dest_problem(root, cfg, fact["dest"]):
-        return err
+def _fact_problem(root: Path, fact: dict, original: str) -> str | None:
+    dest = _read(root, fact["dest"])
+    if dest is None:
+        return f"{fact['dest']} is not a doc that exists"
     src, dst = _norm(fact["src_quote"]), _norm(fact["dest_quote"])
     if len(src) < MIN_QUOTE or len(dst) < MIN_QUOTE:
         return f"quotes must be at least {MIN_QUOTE} characters"
     if src not in _norm(original):
         return f"quote not found in the deleted file: {fact['src_quote']!r}"
-    if dst not in _norm(_read(root, fact["dest"])):
+    if dst not in _norm(dest):
         return f"quote not found in {fact['dest']}: {fact['dest_quote']!r}"
     return None
 
 
-def check(root: Path, cfg: dict, deleted: list[str], snap: dict, after: dict, parsed: dict) -> list[str]:
-    # a new request is never committed by Libraryan, so a doc "moved" there would be lost
-    # existence re-checked: `after` predates the runner's Discard: removals
-    new_blobs = {b for p, b in after.items()
-                 if b and snap.get(p) is None and is_protected(p, cfg) and (Path(root) / p).is_file()}
-    problems = []
-    for path in deleted:
-        if snap.get(path) and snap[path] in new_blobs:  # pure move
+def check(root: Path, deleted: dict[str, str], pure_moves: set[str], parsed: dict) -> dict[str, str]:
+    """{deleted path: why it must be kept}. `deleted` maps each deleted doc to its old text; `pure_moves` are
+    deleted docs whose exact content is now in a new file, which need no ledger line."""
+    problems = {}
+    for path, original in deleted.items():
+        if path in pure_moves or path in parsed["none"]:
             continue
-        if path in parsed["none"]:
-            continue
-        original = _head(root, path)
         errors = []
         if new := parsed["moved"].get(path):
-            err = _dest_problem(root, cfg, new)
-            if not err and difflib.SequenceMatcher(None, original, _read(root, new)).ratio() < 0.5:
-                err = f"{new} is less than 50% similar to the deleted file"
-            if not err:
+            text = _read(root, new)
+            if text is None:
+                errors.append(f"{new} is not a doc that exists")
+            elif difflib.SequenceMatcher(None, original, text).ratio() < 0.5:
+                errors.append(f"{new} is less than 50% similar to the deleted file")
+            else:
                 continue
-            errors.append(err)
         facts = [f for f in parsed["facts"] if f["deleted"] == path]
-        fact_errors = [e for f in facts if (e := _fact_problem(root, cfg, f, original))]
-        if len(fact_errors) < len(facts):  # at least one valid Fact line
+        fact_errors = [e for f in facts if (e := _fact_problem(root, f, original))]
+        if len(fact_errors) < len(facts):  # at least one checked Fact line
             continue
         errors += fact_errors
-        problems.append(f"deletion ledger: {path}: "
-                        + ("; ".join(errors) or "no Moved: or Fact: line says where its facts went"))
+        problems[path] = "; ".join(errors) or "the agent did not say where its facts went"
     return problems

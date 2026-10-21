@@ -4,8 +4,8 @@
 
 | Version | Supported |
 |---|---|
-| 0.2.x | Yes |
-| < 0.2 | No |
+| 0.4.x | Yes |
+| < 0.4 | No |
 
 ## Reporting a vulnerability
 
@@ -15,6 +15,5 @@ You can expect an acknowledgement within a few days. This is a volunteer-maintai
 
 ## Scope notes
 
-- The single-writer lock is a guardrail, not a security boundary. As listed under "Known limits" in the README, `LIBRARYAN=1` in the environment and `git commit --no-verify` both bypass it. Reports that only demonstrate these bypasses are expected behaviour.
-- Secret scanning with [gitleaks](https://github.com/gitleaks/gitleaks) is optional. Libraryan does not guarantee that secrets are caught.
-- Libraryan runs Claude Code on your machine with your credentials; review what you let it commit.
+- `libraryan fix` runs Claude Code on your machine, with your credentials, in a throwaway git worktree. Only `.md` changes are copied back, and nothing is committed; read the diff before you keep it.
+- The agent may only run read-only git commands plus `git rm` and `git mv`, and edits files through Claude Code's own tools.
