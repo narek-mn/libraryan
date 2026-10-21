@@ -10,3 +10,9 @@ def test_claude_bin_alias(tmp_path):
     assert cfg["runtime_bin"] == "/x/claude" and "claude_bin" not in cfg and cfg["runtime"] == "claude"
     (tmp_path / config.CONFIG_PATH).write_text(json.dumps({"claude_bin": "/x/claude", "runtime_bin": "/y/c"}))
     assert config.load(tmp_path)["runtime_bin"] == "/y/c"
+
+
+def test_approval_cannot_be_turned_off(tmp_path):
+    (tmp_path / ".libraryan").mkdir()
+    (tmp_path / config.CONFIG_PATH).write_text(json.dumps({"ask_before_commit": False}))
+    assert config.load(tmp_path)["ask_before_commit"] is True

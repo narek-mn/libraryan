@@ -1,8 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.3.2 - 2026-10-21
 
+- A person approves every docs commit. `ask_before_commit` can no longer be turned off; a stored `false` is ignored.
 - Every command that commits now asks first. `libraryan upgrade`, `libraryan uninstall` and `libraryan runtime NAME` list the files and ask "Commit these? [y/N]", like `init`; "no" leaves the project unchanged. `--yes` skips the question; without a terminal they stop and say to use `--yes`.
+- Setup shows a live line in the terminal: what is running, time so far and docs changed so far. `init` no longer warns about a time limit.
 
 ## 0.3.1 - 2026-10-20
 

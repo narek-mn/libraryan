@@ -53,7 +53,7 @@ cd your-project            # any git repo, on its default branch
 libraryan init             # once per project: installs, builds the KB, commits
 ```
 
-That's it. From now on Libraryan updates the docs after your commits and checks them once a day. It **asks before every commit**: each run leaves a proposal you check with `libraryan review` and accept with `libraryan approve` (or turn on automatic commits). It **never pushes**. Remove it at any time with `libraryan uninstall`; the docs stay.
+That's it. From now on Libraryan updates the docs after your commits and checks them once a day. It **asks before every commit**: each run leaves a proposal you check with `libraryan review` and accept with `libraryan approve`. This cannot be turned off. It **never pushes**. Remove it at any time with `libraryan uninstall`; the docs stay.
 
 <details>
 <summary><b>Or install as a Claude Code plugin</b></summary>

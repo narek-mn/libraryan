@@ -577,7 +577,8 @@ def test_global_hooks_path_ignored(repo, tmp_path, monkeypatch):
 def test_init_announces_setup(repo, monkeypatch, capsys):
     monkeypatch.setattr(install.shutil, "which", lambda name: "/nonexistent/claude" if name == "claude" else None)
     install.init(repo, SRC, runtime="claude")
-    assert ("Setup running (can take up to 120 minutes); report: .libraryan/state/reports/latest.md"
+    assert ("Building the knowledge base. It reads the whole project, so a large one takes a while; "
+            "you can leave it running. Report: .libraryan/state/reports/latest.md"
             in capsys.readouterr().out)
 
 

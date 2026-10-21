@@ -10,6 +10,7 @@ import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -243,6 +244,48 @@ def _child_env() -> dict:
     return {**{k: v for k, v in os.environ.items() if not drop(k)}, "LIBRARYAN": "1"}
 
 
+class _Progress:
+    """A live status line on a terminal while one model call runs: what it does, time so far, docs changed so far.
+    No percentage: the agent does not say how much work is left. Silent when stderr is not a terminal (hooks, cron)."""
+    SPIN = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+    def __init__(self, role: str, cwd: Path):
+        self.label = "Writing the docs" if role == "author" else "A second agent is checking the changes"
+        self.cwd, self.count = cwd, role == "author"
+        self.on = sys.stderr.isatty()
+        self.stop, self.start, self.docs = threading.Event(), time.monotonic(), 0
+
+    def __enter__(self):
+        if self.on:
+            threading.Thread(target=self._loop, daemon=True).start()
+        return self
+
+    def __exit__(self, *exc):
+        if self.on:
+            self.stop.set()
+            sys.stderr.write(f"\r\033[K✓ {self._line()}\n")
+            sys.stderr.flush()
+
+    def _line(self) -> str:
+        m, s = divmod(int(time.monotonic() - self.start), 60)
+        docs = f" · {self.docs} doc{'s' * (self.docs != 1)} changed so far" if self.count else ""
+        return f"{self.label} · {m}:{s:02d}{docs}"
+
+    def _docs(self) -> int:
+        r = subprocess.run(["git", "status", "--porcelain", "-z", "--untracked-files=all"], cwd=self.cwd,
+                           capture_output=True, text=True)
+        return sum(1 for e in r.stdout.split("\0") if e[3:].endswith(".md") and not e[3:].startswith(".libraryan/"))
+
+    def _loop(self) -> None:
+        for i in itertools.count():
+            if self.count and i % 10 == 0:
+                self.docs = self._docs()
+            sys.stderr.write(f"\r\033[K{self.SPIN[i % len(self.SPIN)]} {self._line()}")
+            sys.stderr.flush()
+            if self.stop.wait(1):
+                return
+
+
 @functools.lru_cache(maxsize=None)
 def _runtime_version(name: str, bin: str | None) -> str | None:
     return runtimes.detect(name, bin)
@@ -274,7 +317,8 @@ def _call_model(role: str, prompt: str, cwd: Path, cfg: dict, reason: str) -> tu
     except OSError as e:
         return "", [f"could not start {cmd[0]}: {e}"], {}
     try:
-        out, err = p.communicate(timeout=timeout)
+        with _Progress(role, Path(cwd)):
+            out, err = p.communicate(timeout=timeout)
     except BaseException as e:
         try:
             os.killpg(p.pid, signal.SIGKILL)

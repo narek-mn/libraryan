@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "libraryan"
-version = "0.3.1"
+version = "0.3.2"
 description = "A vendor-neutral docs agent: the only writer of a git project's Markdown knowledge base; every other agent files a request"
 readme = "README.md"
 requires-python = ">=3.10"

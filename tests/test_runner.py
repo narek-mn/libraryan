@@ -36,7 +36,7 @@ def make_kb(repo, ignore_state=True, runtime="claude", monkeypatch=None):
         monkeypatch.setenv("FAKE_FORMAT", "text" if runtime == "command" else runtime)
         if runtime == "command":
             cfg["runtime_command"] = [sys.executable, str(FAKE_RUNTIME), "{prompt}"]
-    cfg["ask_before_commit"] = False  # the scenarios below test the commit path; ask mode has its own tests
+    cfg["ask_before_commit"] = False  # test-only: these scenarios test the commit path (config.load forces True)
     return cfg
 
 
@@ -176,6 +176,9 @@ def test_cli_run_end_to_end(repo):
     config.save(repo, cfg)
     r = subprocess.run([str(repo / ".libraryan/bin/libraryan"), "run", "--reason", "daily"], cwd=repo,
                        capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    assert libraryan_commits(repo) == []  # a stored `ask_before_commit: false` is ignored: a person approves
+    r = subprocess.run([str(repo / ".libraryan/bin/libraryan"), "approve"], cwd=repo, capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     assert libraryan_commits(repo) == ["docs(libraryan): daily run"]
     assert not list((repo / ".libraryan").rglob("__pycache__"))
@@ -1292,3 +1295,17 @@ def test_tool_error_message_reaches_the_problem(repo, monkeypatch):
     monkeypatch.setenv("FAKE_CLAUDE_EXTRA", "Invalid API key")
     assert runner.run(repo, cfg, "manual") == 1
     assert any("claude failed" in p and "SUMMARY ok" in p for p in runner.problems(repo))
+
+
+def test_progress_line_on_a_terminal(repo, monkeypatch, capsys):
+    cfg = make_kb(repo)
+    monkeypatch.setattr(sys.stderr, "isatty", lambda: True)
+    assert runner.run(repo, cfg, "manual") == 0
+    err = capsys.readouterr().err
+    assert "Writing the docs · 0:0" in err and "✓ Writing the docs" in err and "changed so far" in err
+    assert "%" not in err
+
+
+def test_no_progress_line_without_a_terminal(repo, capsys):
+    assert runner.run(repo, make_kb(repo), "manual") == 0
+    assert "Writing the docs" not in capsys.readouterr().err

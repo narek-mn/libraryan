@@ -295,8 +295,8 @@ def init(project: Path, source: Path = PKG, run_setup: bool = True, runtime: str
     if not run_setup:
         return 0
     cfg = config.load(project)
-    print(f"Setup running (can take up to {cfg['setup_timeout_minutes']} minutes); "
-          "report: .libraryan/state/reports/latest.md", flush=True)
+    print("Building the knowledge base. It reads the whole project, so a large one takes a while; "
+          "you can leave it running. Report: .libraryan/state/reports/latest.md", flush=True)
     code = runner.run(project, cfg, "setup", extra_paths=_files(project))
     if code:
         why = "".join(f"\n  - {p}" for p in runner.problems(project)) or "\n  - (no reason recorded)"

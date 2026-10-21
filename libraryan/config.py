@@ -49,6 +49,7 @@ def load(root: Path) -> dict:
         old = stored.pop("claude_bin", None)  # 0.2.x name
         cfg.update(stored)
         cfg["runtime_bin"] = cfg["runtime_bin"] or old
+    cfg["ask_before_commit"] = True  # a person approves every commit; a stored `false` (0.3.x) is ignored
     return cfg
 
 
