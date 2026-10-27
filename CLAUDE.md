@@ -15,3 +15,10 @@ style, README and CHANGELOG on behaviour change): @CONTRIBUTING.md
 3. If you changed what a command does, run it from source and read the output:
    `python3 -c 'import sys; from libraryan.cli import entry; sys.argv=["libraryan","check"]; entry()'`
    Test `fix` against a throwaway repo, never this one.
+
+## Who decides
+
+Narek handed this project to Claude: commit, push and tag without asking.
+A PyPI release needs Narek's yes each time, because it cannot be taken back.
+Never install Libraryan into this repo. Keep the tool small; Narek prefers
+deleting over keeping options or backups.
